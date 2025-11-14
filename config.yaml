@@ -1,0 +1,199 @@
+# Configuration for Semantic Ego-Network GNN vs Baseline Comparison
+
+# Data settings
+data:
+  path: "data/raw" # Path to RMHD CSV files
+
+  # Temporal analysis for early depression detection
+  temporal_windows:
+    early_2018: "2018-Q1" # Early 2018 for baseline detection
+    mid_2018: "2018-Q2-Q3" # Mid 2018 for progression analysis
+    late_2018: "2018-Q4" # Late 2018 for validation
+    early_2019: "2019-Q1" # Early 2019 for longitudinal analysis
+
+  # Depression subreddits (simplified to focus only on depression)
+  depression_subreddits:
+    - "depression"
+
+  # Control subreddits
+  control_subreddits:
+    - "conspiracy"
+    - "divorce"
+    - "fitness"
+    - "guns"
+    - "jokes"
+    - "legaladvice"
+    - "meditation"
+    - "parenting"
+    - "personalfinance"
+    - "relationships"
+    - "teaching"
+
+  # Stratified sampling for lightweight research
+  target_posts_per_class: 5000 # 5000 depression + 5000 control posts
+  min_posts_per_user: 3 # Filter users with few posts
+
+# Semantic similarity calculation for ego-networks
+semantic_similarity:
+  # Primary semantic similarity method
+  method: "sentence_transformers" # Options: "sentence_transformers", "bert", "tfidf"
+  model_name: "all-MiniLM-L6-v2" # Sentence transformer model for SBERT embeddings
+
+  # Text preprocessing for semantic analysis
+  preprocessing:
+    min_post_length: 10 # Minimum characters per post
+    max_posts_per_user: 100 # Limit posts per user for computational efficiency
+    remove_stopwords: false # Keep stopwords for semantic meaning
+    normalize_text: true # Lowercase and clean text
+
+  # Temporal aggregation for semantic profiles
+  temporal_aggregation: "mean" # How to aggregate embeddings over time
+
+# Semantic ego-network construction
+ego_network:
+  # Semantic similarity threshold for edge creation
+  similarity_threshold: 0.6 # Higher threshold for semantic similarity
+
+  # Ego-network size parameters (following methodology)
+  k_neighbors: 8 # Top-k most semantically similar users (typically 5-10)
+  max_neighbors: 50 # Maximum neighbors per user
+  min_neighbors: 5 # Minimum neighbors to include user
+  k_hops: 2 # K-hop neighborhood expansion (research methodology standard)
+
+  # Network construction method
+  construction_method: "threshold" # Options: "threshold", "knn", "adaptive"
+
+  # Temporal evolution of networks
+  temporal_snapshots: false # Disable temporal snapshots for simplified testing
+  snapshot_intervals: ["early_2018", "mid_2018", "late_2018"]
+
+# Model architectures
+models:
+  # Baseline: Content-based classifier
+  baseline:
+    type: "transformer" # Options: "transformer", "lstm", "cnn"
+    model_name: "roberta-base" # Pre-trained model for baseline
+    max_length: 512 # Maximum input sequence length
+    hidden_dim: 256
+    dropout: 0.3
+    num_classes: 2 # Depression vs Control (binary classification)
+
+  # Proposed: Semantic Ego-Network GNN
+  semantic_gnn:
+    type: "gat" # Graph Attention Network
+    input_dim: 135 # Multi-dimensional features: 64 (semantic) + 62 (LIWC) + 9 (temporal)
+    hidden_dim: 128
+    output_dim: 64
+    num_heads: 4 # Multi-head attention
+    num_layers: 3
+    dropout: 0.4
+    residual_connections: true
+
+    # Temporal component for longitudinal analysis
+    temporal_component: true
+    temporal_dim: 32
+
+    # Feature composition breakdown
+    feature_breakdown:
+      semantic_dims: 64    # SBERT sentence embeddings
+      liwc_dims: 62       # LIWC psychological categories
+      temporal_dims: 9    # Temporal posting patterns
+
+# Training parameters
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+  # Early stopping
+  patience: 20
+  min_delta: 0.001
+
+  # Optimization
+  optimizer: "adam"
+  scheduler: "reduce_on_plateau"
+  factor: 0.5
+  scheduler_patience: 10
+
+# Evaluation settings
+evaluation:
+  # Metrics to compute
+  metrics: ["accuracy", "precision", "recall", "f1", "auc", "specificity"]
+
+  # Cross-validation
+  cv_folds: 5
+  stratified: true
+
+  # Early detection analysis - progressive temporal windows
+  early_detection:
+    baseline_window: "early_2018" # Train baseline model
+    test_windows:
+      - "mid_2018" # Test early detection capability
+      - "late_2018" # Test progression detection
+      - "early_2019" # Test longitudinal performance
+
+  # Model comparison
+  comparison:
+    baseline_vs_gnn: true
+    statistical_tests: ["t_test", "wilcoxon"]
+    confidence_level: 0.95
+
+# Experiment settings
+experiment:
+  # Random seed for reproducibility
+  seed: 42
+
+  # Logging
+  log_level: "INFO"
+  save_logs: true
+
+  # Model saving
+  save_checkpoints: true
+  checkpoint_dir: "checkpoints/"
+
+  # Results saving
+  save_results: true
+  results_dir: "results/"
+
+# Ablation study parameters
+ablation:
+  # Test different semantic similarity methods
+  similarity_methods: ["sentence_transformers", "bert", "tfidf"]
+
+  # Test different similarity thresholds
+  thresholds: [0.4, 0.5, 0.6, 0.7, 0.8]
+
+  # Test different ego-network sizes
+  max_neighbors: [20, 50, 100, 150]
+
+  # Test temporal components
+  temporal_analysis:
+    with_temporal: true
+    without_temporal: true
+
+  # Test different GNN architectures
+  gnn_variants: ["gcn", "gat", "graphsage"]
+
+# Interpretability analysis
+interpretability:
+  # Feature importance analysis
+  compute_feature_importance: true
+  top_k_features: 20
+
+  # Attention visualization
+  visualize_attention: true
+  sample_size: 100 # Number of samples for visualization
+
+  # Network analysis
+  network_statistics: true
+  plot_networks: true
+
+# Hardware settings
+hardware:
+  use_cuda: true
+  device: "auto" # auto-detect best device
+
+  # Memory management
+  batch_accumulation: 1
+  gradient_clip: 1.0

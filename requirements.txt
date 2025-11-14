@@ -1,0 +1,49 @@
+# Core Dependencies
+torch>=1.12.0
+torch-geometric>=2.1.0
+pytorch-lightning>=1.7.0
+
+# Data Processing
+pandas>=1.4.0
+numpy>=1.21.0
+scikit-learn>=1.1.0
+nltk>=3.7
+transformers>=4.20.0
+
+# Graph Processing
+networkx>=2.8
+torch-scatter>=2.0.9
+torch-sparse>=0.6.15
+torch-cluster>=1.6.0
+
+# Feature Extraction
+textstat>=0.7.0
+vaderSentiment>=3.3.2
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+plotly>=5.9.0
+networkx>=2.8
+
+# Experiment Tracking
+wandb>=0.12.0
+tensorboard>=2.9.0
+
+# Configuration
+pyyaml>=6.0
+omegaconf>=2.2.0
+
+# Development
+jupyter>=1.0.0
+jupyterlab>=3.4.0
+ipykernel>=6.15.0
+
+# Testing
+pytest>=7.1.0
+pytest-cov>=3.0.0
+
+# Utilities
+tqdm>=4.64.0
+joblib>=1.1.0
+psutil>=5.9.0
