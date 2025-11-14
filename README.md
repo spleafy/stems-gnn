@@ -203,8 +203,8 @@ Source: [Zenodo](https://zenodo.org/record/3941387)
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/spleafy/ccir.git
-cd ccir
+git clone https://github.com/spleafy/stems-gnn.git
+cd stems-gnn
 ```
 
 ### Step 2: Create Virtual Environment
@@ -608,6 +608,6 @@ SOFTWARE.
 
 For questions, issues, or collaboration inquiries:
 
-- **Issues**: [GitHub Issues](https://github.com/spleafy/ccir/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/spleafy/ccir/discussions)
+- **Issues**: [GitHub Issues](https://github.com/spleafy/stems-gnn/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/spleafy/stems-gnn/discussions)
 - **Email**: martinpetrov404@gmail.com
