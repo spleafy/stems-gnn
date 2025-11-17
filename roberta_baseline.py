@@ -1,10 +1,8 @@
 """
-Memory-efficient implementation for MacBook Air M2 16GB.
+RoBERTa Baseline for Depression Detection.
 
-Provides two approaches:
-1. Ultra-lightweight RoBERTa with aggressive memory management
-2. Lightweight alternative using DistilBERT/TinyBERT
-3. Fallback to sklearn models that follow the methodology
+Memory-efficient transformer implementation with fallback to traditional ML models.
+Optimized for resource-constrained environments (MacBook Air M2 16GB).
 """
 
 import torch
@@ -28,19 +26,27 @@ import warnings
 warnings.filterwarnings('ignore')
 
 def clear_memory():
-    """Clear GPU and CPU memory."""
+    """Clear GPU and CPU memory for resource management."""
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
 
 def get_memory_usage():
-    """Get current memory usage."""
+    """
+    Get current memory usage in MB.
+
+    Returns:
+        float: Memory usage in megabytes
+    """
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
 
 class MemoryEfficientRoBERTa(nn.Module):
     """
-    Ultra memory-efficient RoBERTa for MacBook Air M2.
+    Memory-efficient RoBERTa classifier for content-based depression detection.
+
+    Uses DistilRoBERTa with frozen lower layers and gradient checkpointing.
+    Falls back to lighter models (BERT-tiny) or simple embeddings if memory constrained.
     """
 
     def __init__(self, max_length=128, num_classes=2, dropout=0.3):
@@ -68,7 +74,6 @@ class MemoryEfficientRoBERTa(nn.Module):
             self.use_roberta = True
 
         except Exception as e:
-            
             try:
                 model_name = 'prajjwal1/bert-tiny'
 
@@ -83,7 +88,6 @@ class MemoryEfficientRoBERTa(nn.Module):
                 self.use_roberta = True
 
             except Exception as e2:
-
                 self.use_roberta = False
                 hidden_size = 128
                 self.embedding = nn.Embedding(5000, hidden_size)
@@ -135,7 +139,10 @@ class MemoryEfficientRoBERTa(nn.Module):
 
 class LightweightSemanticProcessor:
     """
-    Ultra-lightweight semantic processing for MacBook Air M2.
+    Lightweight semantic processing for baseline GNN experiments.
+
+    Creates user embeddings via SBERT or TF-IDF and constructs simple
+    ego-networks for comparative baseline evaluation.
     """
 
     def __init__(self, max_users=300):
@@ -145,21 +152,25 @@ class LightweightSemanticProcessor:
 
         try:
             model_name = 'all-MiniLM-L6-v2'
-            
             self.sbert_model = SentenceTransformer(model_name)
             self.use_sbert = True
             self.embedding_dim = 384
 
         except Exception as e:
-            
             self.use_sbert = False
             self.embedding_dim = 256
 
     def create_embeddings(self, user_posts):
-        """Create embeddings with memory management."""
+        """
+        Create user embeddings from post text.
 
+        Args:
+            user_posts: Dictionary mapping user IDs to post lists
+
+        Returns:
+            Dictionary mapping user IDs to embedding vectors
+        """
         user_list = list(user_posts.keys())[:self.max_users]
-
         embeddings = {}
 
         if self.use_sbert:
@@ -284,7 +295,7 @@ class LightweightSemanticProcessor:
         print(f"Built {len(ego_networks)} ego networks")
         return ego_networks
 
-def train_memory_efficient_baseline(user_posts, user_labels, config, return_predictions=False):
+def train_memory_efficient_baseline(user_posts, user_labels, config, return_predictions=False, save_model=False, results_saver=None):
     """
     Train baseline with aggressive memory management.
 
@@ -293,6 +304,8 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
         user_labels: User labels
         config: Configuration
         return_predictions: If True, returns (y_true, y_prob) for ROC curves
+        save_model: If True and results_saver is provided, saves model checkpoint
+        results_saver: ResultsSaver instance for saving model checkpoints
     """
     print("=== Training Memory-Efficient Baseline ===")
     print(f"Initial memory: {get_memory_usage():.1f} MB")
@@ -453,6 +466,21 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
 
                 results['memory_efficient_transformer'] = {'metrics': transformer_metrics}
                 print(f"Memory-Efficient Transformer - F1: {transformer_metrics['f1']:.4f}")
+
+                # Save model checkpoint if requested
+                if save_model and results_saver is not None:
+                    model_metadata = {
+                        'model_type': 'RoBERTa',
+                        'max_length': 128,
+                        'dropout': 0.3,
+                        'batch_size': batch_size,
+                        'num_epochs': num_epochs,
+                        'learning_rate': 5e-4,
+                        'metrics': transformer_metrics,
+                        'training_samples': len(train_texts),
+                        'test_samples': len(test_labels)
+                    }
+                    results_saver.save_model_checkpoint(model, 'roberta_baseline', model_metadata)
             else:
                 print("Transformer evaluation failed due to memory constraints")
 

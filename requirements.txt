@@ -19,6 +19,7 @@ torch-cluster>=1.6.0
 # Feature Extraction
 textstat>=0.7.0
 vaderSentiment>=3.3.2
+sentence-transformers>=2.0.0
 
 # Visualization
 matplotlib>=3.5.0

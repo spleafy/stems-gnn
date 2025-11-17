@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 """
-Main script for STEMS-GNN vs RoBERTa Baseline Research
+Main Execution Pipeline for STEMS-GNN Research.
 
-Compares two approaches for depression detection:
-1. RoBERTa Baseline: Content-based transformer classifier
-2. STEMS-GNN: Multi-dimensional similarity + ego-networks
+Implements comprehensive comparison of depression detection approaches:
+    - RoBERTa Baseline: Content-based transformer classifier
+    - STEMS-GNN: Multi-dimensional semantic similarity with ego-networks
+    - Ablation Studies: Individual component validation
 
-Usage: python main.py
+Usage:
+    python main.py
 """
 
+import time
+import psutil
+import os
 from data_preprocessing import load_rmhd_data
 from roberta_baseline import train_memory_efficient_baseline
 from semantic_ego_gnn import train_correct_semantic_gnn
 from utils import load_config, set_seed
+from results_saver import ResultsSaver
 
 
 def run_model_comparison():
-    """Run comparison between RoBERTa baseline and STEMS-GNN."""
+    """
+    Execute comparative evaluation of RoBERTa baseline and STEMS-GNN.
+
+    Trains both models on RMHD dataset and reports performance metrics.
+    """
     print("\n" + "=" * 60)
     print("STEMS-GNN vs RoBERTa Baseline Comparison")
     print("Depression Detection using Multi-dimensional Similarity")
@@ -75,7 +85,20 @@ def run_model_comparison():
 
 
 def run_ablation_study(user_posts, user_labels, config):
-    """Run ablation study with different similarity weight configurations."""
+    """
+    Execute ablation study to validate individual similarity components.
+
+    Tests linguistic-only, temporal-only, psychological-only, and full combined
+    similarity configurations to assess individual component contributions.
+
+    Args:
+        user_posts: Dictionary mapping user IDs to post lists
+        user_labels: Dictionary mapping user IDs to binary labels
+        config: Configuration dictionary from config.yaml
+
+    Returns:
+        Tuple of (ablation_results, ablation_predictions) dictionaries
+    """
     print("\nAblation Study: Testing Individual Similarity Components")
 
     ablation_configs = {
@@ -114,21 +137,65 @@ def run_ablation_study(user_posts, user_labels, config):
     return ablation_results, ablation_predictions
 
 
-def run_comprehensive_comparison(user_posts, user_labels, config):
-    """Run comprehensive comparison including ablation study."""
+def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=None, save_models=False):
+    """
+    Execute comprehensive comparison with baseline, proposed method, and ablation studies.
+
+    Tracks execution time and memory usage for performance analysis.
+
+    Args:
+        user_posts: Dictionary mapping user IDs to post lists
+        user_labels: Dictionary mapping user IDs to binary labels
+        config: Configuration dictionary from config.yaml
+        results_saver: Optional ResultsSaver instance for checkpoint persistence
+        save_models: If True, saves model checkpoints
+
+    Returns:
+        Tuple of (all_results, all_predictions, performance_metrics)
+    """
     print("\n" + "="*60)
     print("Comprehensive Model Comparison with Ablation Study")
     print("="*60)
 
+    performance_metrics = {
+        'execution_time_sec': {},
+        'memory_delta_mb': {},
+        'peak_memory_mb': {}
+    }
+
+    process = psutil.Process(os.getpid())
+
     print("\nTraining RoBERTa Baseline...")
+    mem_before_rb = process.memory_info().rss / 1024 / 1024
+    start_time_rb = time.time()
+
     roberta_result, roberta_predictions = train_memory_efficient_baseline(
-        user_posts, user_labels, config, return_predictions=True
+        user_posts, user_labels, config, return_predictions=True,
+        save_model=save_models, results_saver=results_saver
     )
 
+    end_time_rb = time.time()
+    mem_after_rb = process.memory_info().rss / 1024 / 1024
+
+    performance_metrics['execution_time_sec']['RoBERTa-memory_efficient_transformer'] = end_time_rb - start_time_rb
+    performance_metrics['memory_delta_mb']['RoBERTa-memory_efficient_transformer'] = mem_after_rb - mem_before_rb
+    performance_metrics['peak_memory_mb']['RoBERTa-memory_efficient_transformer'] = mem_after_rb
+
     print("\nTraining STEMS-GNN...")
+    mem_before_gnn = process.memory_info().rss / 1024 / 1024
+    start_time_gnn = time.time()
+
     gnn_result, gnn_predictions = train_correct_semantic_gnn(
-        user_posts, user_labels, config, return_predictions=True
+        user_posts, user_labels, config, return_predictions=True,
+        save_model=save_models, results_saver=results_saver
     )
+
+    end_time_gnn = time.time()
+    mem_after_gnn = process.memory_info().rss / 1024 / 1024
+
+    performance_metrics['execution_time_sec']['Semantic Ego-GNN'] = end_time_gnn - start_time_gnn
+    performance_metrics['memory_delta_mb']['Semantic Ego-GNN'] = mem_after_gnn - mem_before_gnn
+    performance_metrics['peak_memory_mb']['Semantic Ego-GNN'] = mem_after_gnn
 
     ablation_results, ablation_predictions = run_ablation_study(user_posts, user_labels, config)
 
@@ -144,22 +211,29 @@ def run_comprehensive_comparison(user_posts, user_labels, config):
         'ablation_study': ablation_predictions
     }
 
-    return all_results, all_predictions
+    return all_results, all_predictions, performance_metrics
 
 
 def main():
-    """Main research pipeline."""
+    """Execute standard model comparison pipeline."""
     run_model_comparison()
 
 
 def main_with_results():
-    """Main pipeline with comprehensive results generation."""
+    """
+    Execute comprehensive analysis pipeline with full result persistence.
+
+    Trains RoBERTa baseline and STEMS-GNN, runs ablation studies, and saves
+    all results (metrics, visualizations, model checkpoints) to results directory.
+    """
     print("\n" + "="*60)
     print("STEMS-GNN Research: Comprehensive Analysis")
     print("="*60)
 
     config = load_config('config.yaml')
     set_seed(42)
+
+    saver = ResultsSaver(results_dir='results')
 
     print("\nLoading dataset...")
     raw_data = load_rmhd_data(
@@ -171,12 +245,45 @@ def main_with_results():
     user_labels = raw_data['user_labels']
     print(f"Dataset loaded: {len(user_posts)} users")
 
-    run_comprehensive_comparison(user_posts, user_labels, config)
+    dataset_info = {
+        'total_users': len(user_posts),
+        'depression_users': sum(user_labels.values()),
+        'control_users': len(user_labels) - sum(user_labels.values()),
+        'class_ratio': sum(user_labels.values()) / len(user_labels) if len(user_labels) > 0 else 0,
+        'avg_posts_per_user': sum(len(posts) for posts in user_posts.values()) / len(user_posts) if len(user_posts) > 0 else 0,
+    }
+
+    all_results, all_predictions, performance_metrics = run_comprehensive_comparison(
+        user_posts, user_labels, config, results_saver=saver, save_models=True
+    )
+
+    roberta_result = all_results.get('roberta_baseline', {})
+    gnn_result = all_results.get('semantic_gnn_full', {})
+    ablation_results = all_results.get('ablation_study', {})
+
+    predictions_dict = {}
+    if 'roberta_baseline' in all_predictions:
+        predictions_dict['RoBERTa Baseline'] = all_predictions['roberta_baseline']
+    if 'semantic_gnn_full' in all_predictions:
+        predictions_dict['Semantic Ego-GNN'] = all_predictions['semantic_gnn_full']
+
+    if 'ablation_study' in all_predictions:
+        for config_name, pred_tuple in all_predictions['ablation_study'].items():
+            predictions_dict[config_name.replace('_', ' ').title()] = pred_tuple
+
+    saver.save_all_results(
+        roberta_results=roberta_result,
+        gnn_results=gnn_result,
+        ablation_results=ablation_results,
+        dataset_info=dataset_info,
+        predictions=predictions_dict,
+        performance_metrics=performance_metrics
+    )
 
     print("\n" + "="*60)
     print("Analysis Complete")
     print("="*60)
-    print("Results saved to: results/\n")
+    print(f"Results saved to: {saver.results_dir}/\n")
 
 
 if __name__ == "__main__":

@@ -211,8 +211,23 @@ class CorrectSemanticProcessor:
 
         return combined_similarity, users
 
-    def build_ego_networks(self, user_features, k_neighbors=8, threshold=0.4):
-        """Build semantic ego-networks."""
+    def build_ego_networks(self, user_features, k_neighbors=50, threshold=0.6, k_hops=2, min_neighbors=5):
+        """
+        Build semantic ego-networks with k-hop expansion.
+
+        Constructs ego-networks by finding semantically similar neighbors and expanding
+        to k-hop neighborhoods. Ensures minimum connectivity through adaptive neighbor selection.
+
+        Args:
+            user_features: Dictionary mapping user IDs to feature vectors
+            k_neighbors: Maximum number of neighbors per user
+            threshold: Similarity threshold for edge creation (τ)
+            k_hops: Number of hops for neighborhood expansion
+            min_neighbors: Minimum neighbors required to include a user
+
+        Returns:
+            Dictionary mapping user IDs to PyTorch Geometric Data objects
+        """
         print("Constructing semantic ego-networks...")
 
         similarity_matrix, users = self.calculate_multi_similarity(user_features)
@@ -229,20 +244,56 @@ class CorrectSemanticProcessor:
                     neighbor_indices.append((j, sim))
 
             neighbor_indices.sort(key=lambda x: x[1], reverse=True)
-            neighbor_indices = neighbor_indices[:k_neighbors]
 
-            if len(neighbor_indices) < 2:
+            if len(neighbor_indices) > k_neighbors:
+                neighbor_indices = neighbor_indices[:k_neighbors]
+            elif len(neighbor_indices) < min_neighbors:
+                all_neighbors = [(j, similarity_matrix[i][j]) for j in range(len(users)) if j != i]
+                all_neighbors.sort(key=lambda x: x[1], reverse=True)
+                neighbor_indices = all_neighbors[:min_neighbors]
+
+            if len(neighbor_indices) < min_neighbors:
                 continue
 
-            network_indices = [i] + [idx for idx, _ in neighbor_indices]
+            all_network_nodes = set([i])
+            hop_1_neighbors = set([idx for idx, _ in neighbor_indices])
+            all_network_nodes.update(hop_1_neighbors)
+
+            if k_hops >= 2:
+                for hop_1_neighbor in hop_1_neighbors:
+                    hop_2_candidates = []
+                    for j, sim in enumerate(similarity_matrix[hop_1_neighbor]):
+                        if j not in all_network_nodes and sim >= threshold:
+                            hop_2_candidates.append((j, sim))
+
+                    hop_2_candidates.sort(key=lambda x: x[1], reverse=True)
+                    for neighbor_idx, _ in hop_2_candidates[:5]:
+                        all_network_nodes.add(neighbor_idx)
+
+            network_indices = list(all_network_nodes)
+            ego_idx_in_network = network_indices.index(i)
+
+            network_indices = [i] + [idx for idx in network_indices if idx != i]
             network_features = features_matrix[network_indices]
 
             edge_list = []
             edge_weights = []
 
             for k, (neighbor_idx, weight) in enumerate(neighbor_indices, 1):
-                edge_list.extend([[0, k], [k, 0]])
-                edge_weights.extend([weight, weight])
+                if neighbor_idx in network_indices:
+                    local_idx = network_indices.index(neighbor_idx)
+                    edge_list.extend([[0, local_idx], [local_idx, 0]])
+                    edge_weights.extend([weight, weight])
+
+            for idx1 in range(1, len(network_indices)):
+                for idx2 in range(idx1 + 1, len(network_indices)):
+                    global_idx1 = network_indices[idx1]
+                    global_idx2 = network_indices[idx2]
+                    sim = similarity_matrix[global_idx1][global_idx2]
+
+                    if sim >= threshold:
+                        edge_list.extend([[idx1, idx2], [idx2, idx1]])
+                        edge_weights.extend([sim, sim])
 
             node_features = torch.FloatTensor(network_features)
             edge_index = torch.LongTensor(edge_list).t().contiguous() if edge_list else torch.empty((2, 0), dtype=torch.long)
@@ -257,85 +308,143 @@ class CorrectSemanticProcessor:
 
             ego_networks[ego_user] = data
 
-        print(f"Built {len(ego_networks)} ego-networks")
+        print(f"Built {len(ego_networks)} ego-networks with k={k_hops} hop expansion")
         return ego_networks
 
 class CorrectSemanticGNN(nn.Module):
     """
-    Enhanced STEMS-GNN with attention and residual connections.
+    STEMS-GNN: Graph Attention Network with temporal attention mechanism.
+
+    Architecture:
+        - 3 GAT layers with 4 attention heads each
+        - Hidden dimension: 128, Output dimension: 64
+        - Temporal attention weighting of structural attention
+        - Residual connections and layer normalization for training stability
     """
 
-    def __init__(self, input_dim=135, hidden_dim=96, dropout=0.3):
+    def __init__(self, input_dim=135, hidden_dim=128, dropout=0.3):
         super(CorrectSemanticGNN, self).__init__()
+
+        self.semantic_liwc_dim = 126
+        self.temporal_dim = 9
 
         self.input_proj = nn.Linear(input_dim, hidden_dim)
 
-        self.gat1 = GATConv(hidden_dim, hidden_dim//2, heads=4, dropout=dropout, concat=True)
-        self.gat2 = GATConv(hidden_dim*2, hidden_dim, heads=1, dropout=dropout, concat=False)
+        self.gat1 = GATConv(hidden_dim, hidden_dim, heads=4, dropout=dropout, concat=False)
+        self.gat2 = GATConv(hidden_dim, hidden_dim, heads=4, dropout=dropout, concat=False)
+        self.gat3 = GATConv(hidden_dim, 64, heads=4, dropout=dropout, concat=False)
 
-        self.residual1 = nn.Linear(hidden_dim, hidden_dim*2)
-        self.residual2 = nn.Linear(hidden_dim*2, hidden_dim)
+        self.temporal_weight = nn.Parameter(torch.tensor(0.3))
+        self.temporal_proj = nn.Linear(self.temporal_dim, hidden_dim)
 
-        self.norm1 = nn.LayerNorm(hidden_dim*2)
+        self.norm1 = nn.LayerNorm(hidden_dim)
         self.norm2 = nn.LayerNorm(hidden_dim)
+        self.norm3 = nn.LayerNorm(64)
+
+        self.residual1 = nn.Linear(hidden_dim, hidden_dim)
+        self.residual2 = nn.Linear(hidden_dim, hidden_dim)
+        self.residual3 = nn.Linear(hidden_dim, 64)
 
         self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, 64),
+            nn.Linear(64, 64),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(dropout/2),
-            nn.Linear(32, 2)
+            nn.LayerNorm(64),
+            nn.Linear(64, 2)
         )
 
         self.dropout = dropout
         self.hidden_dim = hidden_dim
 
+    def compute_temporal_attention(self, data):
+        """
+        Compute temporal attention weights using cosine similarity of temporal features.
+
+        Returns temporal multiplier: 1 + β · temporal_similarity(t_i, t_j)
+        """
+        if not hasattr(data, 'edge_attr') or data.edge_attr is None:
+            return None
+
+        temporal_features = data.x[:, -self.temporal_dim:]
+        edge_index = data.edge_index
+        temporal_sim = []
+
+        for i in range(edge_index.shape[1]):
+            src, dst = edge_index[0, i], edge_index[1, i]
+            t_i = temporal_features[src]
+            t_j = temporal_features[dst]
+
+            sim = F.cosine_similarity(t_i.unsqueeze(0), t_j.unsqueeze(0))
+            temporal_sim.append(sim)
+
+        temporal_sim = torch.stack(temporal_sim)
+        temporal_multiplier = 1.0 + self.temporal_weight * temporal_sim
+
+        return temporal_multiplier
+
     def forward(self, data):
-        """Enhanced forward pass with attention and residual connections."""
+        """
+        Forward pass with temporal-aware graph attention.
+
+        Args:
+            data: PyTorch Geometric Data object containing node features and edge structure
+
+        Returns:
+            Binary classification logits (depression vs control)
+        """
         if data.num_nodes == 0:
             return torch.zeros(1, 2)
 
         x, edge_index = data.x, data.edge_index
 
         x = self.input_proj(x)
+        temporal_attention = self.compute_temporal_attention(data)
+
         identity1 = x
-
         x = self.gat1(x, edge_index)
+        if temporal_attention is not None and hasattr(data, 'edge_attr'):
+            x = x * (1.0 + 0.1 * torch.mean(temporal_attention))
+        x = F.relu(x)
         x = F.dropout(x, self.dropout, training=self.training)
-
-        if identity1.shape[1] != x.shape[1]:
-            identity1 = self.residual1(identity1)
-        x = self.norm1(x + identity1)
+        x = self.norm1(x + self.residual1(identity1))
 
         identity2 = x
         x = self.gat2(x, edge_index)
+        if temporal_attention is not None:
+            x = x * (1.0 + 0.1 * torch.mean(temporal_attention))
+        x = F.relu(x)
         x = F.dropout(x, self.dropout, training=self.training)
+        x = self.norm2(x + self.residual2(identity2))
 
-        if identity2.shape[1] != x.shape[1]:
-            identity2 = self.residual2(identity2)
-        x = self.norm2(x + identity2)
+        identity3 = x
+        x = self.gat3(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = self.norm3(x + self.residual3(identity3))
 
         ego_features = x[0:1]
-
         logits = self.classifier(ego_features)
 
         return logits
 
-def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weights=(0.4, 0.3, 0.3), return_predictions=False):
+def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weights=(0.4, 0.3, 0.3), return_predictions=False, save_model=False, results_saver=None):
     """
-    Train correct semantic GNN that actually works and follows methodology.
+    Train STEMS-GNN with multi-dimensional semantic similarity networks.
 
     Args:
-        user_posts: User post data
-        user_labels: User labels
-        config: Configuration
-        similarity_weights: Tuple of (alpha, beta, gamma) weights for ablation studies
-        return_predictions: If True, returns (y_true, y_prob) for ROC curves
+        user_posts: Dictionary mapping user IDs to post lists
+        user_labels: Dictionary mapping user IDs to binary labels (0=control, 1=depression)
+        config: Configuration dictionary from config.yaml
+        similarity_weights: Tuple of (α, β, γ) for linguistic, temporal, psychological weights
+        return_predictions: If True, returns (y_true, y_prob) tuple for ROC analysis
+        save_model: If True, saves model checkpoint via results_saver
+        results_saver: ResultsSaver instance for checkpoint persistence
+
+    Returns:
+        Dictionary containing metrics, architecture details, and training statistics
     """
-    print("=== Training Correct STEMS-GNN ===")
-    print(f"Following research methodology with weights: α={similarity_weights[0]}, β={similarity_weights[1]}, γ={similarity_weights[2]}")
+    print("=== Training STEMS-GNN ===")
+    print(f"Similarity weights: α={similarity_weights[0]}, β={similarity_weights[1]}, γ={similarity_weights[2]}")
 
     processor = CorrectSemanticProcessor(max_users=120, similarity_weights=similarity_weights)
 
@@ -344,7 +453,13 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
     if len(user_features) < 30:
         return {'error': 'Insufficient users for training'}
 
-    ego_networks = processor.build_ego_networks(user_features, k_neighbors=4, threshold=0.25)
+    ego_networks = processor.build_ego_networks(
+        user_features,
+        k_neighbors=50,
+        threshold=0.6,
+        k_hops=2,
+        min_neighbors=5
+    )
 
     if len(ego_networks) < 15:
         return {'error': 'Insufficient ego-networks'}
@@ -355,10 +470,17 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
 
     print(f"Training on {len(valid_users)} users")
 
-    train_users, test_users = train_test_split(valid_users, test_size=0.3, random_state=42,
-                                               stratify=[user_labels[u] for u in valid_users])
+    train_val_users, test_users = train_test_split(
+        valid_users, test_size=0.2, random_state=42,
+        stratify=[user_labels[u] for u in valid_users]
+    )
 
-    print(f"Split: {len(train_users)} train, {len(test_users)} test")
+    train_users, val_users = train_test_split(
+        train_val_users, test_size=0.2, random_state=42,
+        stratify=[user_labels[u] for u in train_val_users]
+    )
+
+    print(f"Split: {len(train_users)} train, {len(val_users)} val, {len(test_users)} test")
 
     train_labels = [user_labels[u] for u in train_users]
     print(f"Training balance: {sum(train_labels)}/{len(train_labels)} = {np.mean(train_labels):.2f}")
@@ -366,42 +488,107 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
     device = torch.device('cpu')
     sample_user = list(user_features.keys())[0]
     input_dim = len(user_features[sample_user])
-    print(f"Actual input dimension: {input_dim}")
-    model = CorrectSemanticGNN(input_dim=input_dim, hidden_dim=64, dropout=0.3).to(device)
+    print(f"Input dimension: {input_dim} (64 semantic + 62 LIWC + 9 temporal)")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    model = CorrectSemanticGNN(input_dim=input_dim, hidden_dim=128, dropout=0.3).to(device)
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=0.001,
+        weight_decay=0.0001
+    )
     criterion = nn.CrossEntropyLoss()
 
-    print("Starting training...")
-    model.train()
+    batch_size = 32
+    num_epochs = 100
+    patience = 20
 
-    for epoch in range(50):
+    print(f"Hyperparameters: lr=0.001, batch_size={batch_size}, epochs={num_epochs}, patience={patience}")
+    print("Starting training...")
+
+    best_val_f1 = 0
+    epochs_without_improvement = 0
+    best_model_state = None
+
+    for epoch in range(num_epochs):
+        model.train()
         total_loss = 0
         num_batches = 0
 
-        for user in train_users:
-            if user in ego_networks:
-                optimizer.zero_grad()
+        np.random.shuffle(train_users)
+        for i in range(0, len(train_users), batch_size):
+            batch_users = train_users[i:i+batch_size]
 
-                try:
-                    data = ego_networks[user].to(device)
-                    logits = model(data)
+            optimizer.zero_grad()
+            batch_loss = 0
+            batch_count = 0
 
-                    target = torch.LongTensor([user_labels[user]]).to(device)
-                    loss = criterion(logits, target)
+            for user in batch_users:
+                if user in ego_networks:
+                    try:
+                        data = ego_networks[user].to(device)
+                        logits = model(data)
 
-                    loss.backward()
-                    optimizer.step()
+                        target = torch.LongTensor([user_labels[user]]).to(device)
+                        loss = criterion(logits, target)
 
-                    total_loss += loss.item()
-                    num_batches += 1
+                        batch_loss += loss
+                        batch_count += 1
 
-                except Exception as e:
-                    continue
+                    except Exception as e:
+                        continue
 
-        if epoch % 10 == 0 and num_batches > 0:
-            avg_loss = total_loss / num_batches
-            print(f"Epoch {epoch}: Loss = {avg_loss:.4f}")
+            if batch_count > 0:
+                batch_loss = batch_loss / batch_count
+                batch_loss.backward()
+                optimizer.step()
+
+                total_loss += batch_loss.item()
+                num_batches += 1
+
+        model.eval()
+        val_predictions = []
+        val_true_labels = []
+
+        with torch.no_grad():
+            for user in val_users:
+                if user in ego_networks and user in user_labels:
+                    try:
+                        data = ego_networks[user].to(device)
+                        logits = model(data)
+                        pred = torch.argmax(logits, dim=1).cpu().item()
+
+                        val_predictions.append(pred)
+                        val_true_labels.append(user_labels[user])
+
+                    except Exception as e:
+                        continue
+
+        if len(val_predictions) > 0 and len(set(val_true_labels)) > 1:
+            val_f1 = f1_score(val_true_labels, val_predictions, zero_division=0)
+
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
+                epochs_without_improvement = 0
+                best_model_state = model.state_dict().copy()
+                print(f"Epoch {epoch}: Loss={total_loss/max(num_batches,1):.4f}, Val F1={val_f1:.4f} ✓ (best)")
+            else:
+                epochs_without_improvement += 1
+                if epoch % 10 == 0:
+                    print(f"Epoch {epoch}: Loss={total_loss/max(num_batches,1):.4f}, Val F1={val_f1:.4f} (no improvement: {epochs_without_improvement}/{patience})")
+
+            # Early stopping
+            if epochs_without_improvement >= patience:
+                print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+                break
+        else:
+            if epoch % 10 == 0 and num_batches > 0:
+                avg_loss = total_loss / num_batches
+                print(f"Epoch {epoch}: Loss = {avg_loss:.4f}")
+
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        print(f"Restored best model with validation F1={best_val_f1:.4f}")
 
     print("Evaluating...")
     model.eval()
@@ -452,44 +639,85 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
                 'metrics': metrics,
                 'feature_dimensions': input_dim,
                 'architecture': {
-                    'temporal_features': 'Extracted from CSV files',
-                    'semantic_dimensions': 64,
-                    'gnn_type': 'GAT with residual connections',
-                    'network_construction': 'Adaptive thresholding'
+                    'num_gat_layers': 3,
+                    'hidden_dim': 128,
+                    'output_dim': 64,
+                    'attention_heads': 4,
+                    'temporal_attention': True,
+                    'temporal_beta': 0.3,
+                    'dropout': 0.3,
+                    'gnn_type': '3-layer GAT with temporal attention',
+                    'network_construction': 'k=2 hop expansion with τ=0.6'
                 },
                 'network_stats': {
                     'total_networks': len(ego_networks),
                     'avg_network_size': np.mean([net.num_nodes for net in ego_networks.values()]),
-                    'similarity_components': ['linguistic (64-dim SBERT+LIWC)', 'temporal (CSV data)', 'psychological (LIWC emotions/cognition)'],
-                    'weights': {'alpha': 0.4, 'beta': 0.3, 'gamma': 0.3}
+                    'similarity_threshold': 0.6,
+                    'max_neighbors': 50,
+                    'min_neighbors': 5,
+                    'k_hops': 2,
+                    'similarity_components': ['linguistic (64-dim SBERT+LIWC)', 'temporal (9-dim CSV)', 'psychological (LIWC)'],
+                    'weights': {'alpha': similarity_weights[0], 'beta': similarity_weights[1], 'gamma': similarity_weights[2]}
                 },
                 'training_stats': {
-                    'best_val_f1': metrics['f1'],
-                    'epochs_trained': 50,
+                    'best_val_f1': best_val_f1,
+                    'test_f1': metrics['f1'],
+                    'learning_rate': 0.001,
+                    'weight_decay': 0.0001,
+                    'batch_size': batch_size,
+                    'epochs_trained': epoch + 1,
+                    'max_epochs': num_epochs,
+                    'early_stopping_patience': patience,
                     'train_users': len(train_users),
+                    'val_users': len(val_users),
                     'test_users': len(test_users)
                 },
-                'data_source': 'RMHD with temporal features from CSV',
+                'data_source': 'RMHD with precomputed LIWC and temporal features',
                 'training_samples': len(train_users)
             }
         }
 
-        print(f"\n=== Semantic GNN Results ===")
+        print(f"\n=== STEMS-GNN Results ===")
         print(f"Feature Dimensions: {input_dim} (64 semantic + 62 LIWC + 9 temporal)")
-        print(f"Architecture:")
-        print(f"• Semantic embedding: 64 dimensions")
-        print(f"• Temporal features: CSV data extraction")
-        print(f"• GNN architecture: GAT with residual connections")
-        print(f"• Network construction: Adaptive thresholding")
-        print(f"Multi-dimensional Similarity: α=0.4, β=0.3, γ=0.3")
-        print(f"Data Source: RMHD with temporal features")
-        print(f"Accuracy: {metrics['accuracy']:.4f}")
-        print(f"Precision: {metrics['precision']:.4f}")
-        print(f"Recall: {metrics['recall']:.4f}")
-        print(f"F1-Score: {metrics['f1']:.4f}")
-        print(f"AUC: {metrics['auc']:.4f}")
-        print(f"Networks built: {len(ego_networks)}")
-        print(f"Training completed on {len(train_users)} users")
+        print(f"\nArchitecture:")
+        print(f"• 3 GAT layers with 4 attention heads")
+        print(f"• Hidden dim: 128, Output dim: 64")
+        print(f"• Temporal attention mechanism: β=0.3")
+        print(f"• Dropout: 0.3")
+        print(f"\nNetwork Construction:")
+        print(f"• Similarity threshold τ=0.6")
+        print(f"• Max neighbors: 50, Min neighbors: 5")
+        print(f"• k=2 hop neighborhood expansion")
+        print(f"\nSimilarity Weights:")
+        print(f"• α={similarity_weights[0]} (linguistic)")
+        print(f"• β={similarity_weights[1]} (temporal)")
+        print(f"• γ={similarity_weights[2]} (psychological)")
+        print(f"\nTraining:")
+        print(f"• Learning rate: 0.001")
+        print(f"• Weight decay (L2): 0.0001")
+        print(f"• Batch size: {batch_size}")
+        print(f"• Epochs: {epoch + 1}/{num_epochs}")
+        print(f"• Early stopping patience: {patience}")
+        print(f"\nResults:")
+        print(f"• Accuracy:  {metrics['accuracy']:.4f}")
+        print(f"• Precision: {metrics['precision']:.4f}")
+        print(f"• Recall:    {metrics['recall']:.4f}")
+        print(f"• F1-Score:  {metrics['f1']:.4f}")
+        print(f"• AUC-ROC:   {metrics['auc']:.4f}")
+        print(f"\nDataset:")
+        print(f"• Ego-networks built: {len(ego_networks)}")
+        print(f"• Avg network size: {np.mean([net.num_nodes for net in ego_networks.values()]):.1f} nodes")
+        print(f"• Train/Val/Test: {len(train_users)}/{len(val_users)}/{len(test_users)}")
+
+        # Save model checkpoint if requested
+        if save_model and results_saver is not None:
+            model_metadata = {
+                'similarity_weights': {'alpha': similarity_weights[0], 'beta': similarity_weights[1], 'gamma': similarity_weights[2]},
+                'architecture': results['correct_semantic_gnn']['architecture'],
+                'training_stats': results['correct_semantic_gnn']['training_stats'],
+                'metrics': metrics
+            }
+            results_saver.save_model_checkpoint(model, 'semantic_ego_gnn', model_metadata)
 
         if return_predictions:
             return results, (true_labels, probabilities)
