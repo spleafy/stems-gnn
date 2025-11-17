@@ -427,7 +427,7 @@ class CorrectSemanticGNN(nn.Module):
 
         return logits
 
-def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weights=(0.4, 0.3, 0.3), return_predictions=False, save_model=False, results_saver=None):
+def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weights=(0.4, 0.3, 0.3), return_predictions=False, save_model=False, results_saver=None, cached_features=None):
     """
     Train STEMS-GNN with multi-dimensional semantic similarity networks.
 
@@ -439,6 +439,7 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
         return_predictions: If True, returns (y_true, y_prob) tuple for ROC analysis
         save_model: If True, saves model checkpoint via results_saver
         results_saver: ResultsSaver instance for checkpoint persistence
+        cached_features: Pre-extracted features from UnifiedFeatureExtractor (optional)
 
     Returns:
         Dictionary containing metrics, architecture details, and training statistics
@@ -448,7 +449,13 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
 
     processor = CorrectSemanticProcessor(max_users=120, similarity_weights=similarity_weights)
 
-    user_features = processor.extract_user_features(user_posts, user_labels)
+    # Use cached features if available, otherwise extract
+    if cached_features is not None:
+        print("Using cached features (skipping redundant extraction)")
+        user_features = cached_features['combined_features']
+    else:
+        print("Extracting multi-dimensional features...")
+        user_features = processor.extract_user_features(user_posts, user_labels)
 
     if len(user_features) < 30:
         return {'error': 'Insufficient users for training'}

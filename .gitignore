@@ -41,7 +41,7 @@ data/processed/
 
 # Model checkpoints and results
 checkpoints/
-results/
+# results/
 logs/
 wandb/
 

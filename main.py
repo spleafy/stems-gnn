@@ -19,6 +19,7 @@ from roberta_baseline import train_memory_efficient_baseline
 from semantic_ego_gnn import train_correct_semantic_gnn
 from utils import load_config, set_seed
 from results_saver import ResultsSaver
+from feature_extractor import UnifiedFeatureExtractor
 
 
 def run_model_comparison():
@@ -36,9 +37,13 @@ def run_model_comparison():
     set_seed(42)
 
     print("Loading RMHD dataset...")
+    target_posts = config.get('data', {}).get('target_posts_per_class', 5000)
+    print(f"Configuration: {target_posts} posts per class (total: {target_posts * 2} posts)")
+
     raw_data = load_rmhd_data(
         data_path=config.get('data', {}).get('path', 'data/raw'),
-        target_posts_per_class=5000
+        target_posts_per_class=target_posts,
+        config=config
     )
 
     user_posts = raw_data['user_posts']
@@ -84,7 +89,7 @@ def run_model_comparison():
         print("Error: Training failed for one or both models")
 
 
-def run_ablation_study(user_posts, user_labels, config):
+def run_ablation_study(user_posts, user_labels, config, cached_features=None):
     """
     Execute ablation study to validate individual similarity components.
 
@@ -95,6 +100,7 @@ def run_ablation_study(user_posts, user_labels, config):
         user_posts: Dictionary mapping user IDs to post lists
         user_labels: Dictionary mapping user IDs to binary labels
         config: Configuration dictionary from config.yaml
+        cached_features: Pre-extracted features to avoid redundant computation
 
     Returns:
         Tuple of (ablation_results, ablation_predictions) dictionaries
@@ -118,7 +124,8 @@ def run_ablation_study(user_posts, user_labels, config):
             result, predictions = train_correct_semantic_gnn(
                 user_posts, user_labels, config,
                 similarity_weights=weights,
-                return_predictions=True
+                return_predictions=True,
+                cached_features=cached_features
             )
 
             if 'correct_semantic_gnn' in result:
@@ -141,7 +148,7 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
     """
     Execute comprehensive comparison with baseline, proposed method, and ablation studies.
 
-    Tracks execution time and memory usage for performance analysis.
+    Uses centralized feature extraction with caching to avoid redundant computations.
 
     Args:
         user_posts: Dictionary mapping user IDs to post lists
@@ -165,13 +172,31 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
 
     process = psutil.Process(os.getpid())
 
+    # Extract features ONCE for all models
+    print("\n" + "="*60)
+    print("Extracting Features (shared across all models)")
+    print("="*60)
+
+    feature_extractor = UnifiedFeatureExtractor(config)
+    start_feature_extraction = time.time()
+
+    cached_features = feature_extractor.extract_all_features(
+        user_posts, user_labels, max_users=config.get('semantic_ego_gnn', {}).get('max_users', 150)
+    )
+
+    end_feature_extraction = time.time()
+    print(f"\nFeature extraction complete in {end_feature_extraction - start_feature_extraction:.1f} seconds")
+    print(f"Features will be reused for baseline, STEMS-GNN, and all ablation studies\n")
+
+    # Training models using cached features
     print("\nTraining RoBERTa Baseline...")
     mem_before_rb = process.memory_info().rss / 1024 / 1024
     start_time_rb = time.time()
 
     roberta_result, roberta_predictions = train_memory_efficient_baseline(
         user_posts, user_labels, config, return_predictions=True,
-        save_model=save_models, results_saver=results_saver
+        save_model=save_models, results_saver=results_saver,
+        cached_features=cached_features
     )
 
     end_time_rb = time.time()
@@ -187,7 +212,8 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
 
     gnn_result, gnn_predictions = train_correct_semantic_gnn(
         user_posts, user_labels, config, return_predictions=True,
-        save_model=save_models, results_saver=results_saver
+        save_model=save_models, results_saver=results_saver,
+        cached_features=cached_features
     )
 
     end_time_gnn = time.time()
@@ -197,7 +223,9 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
     performance_metrics['memory_delta_mb']['Semantic Ego-GNN'] = mem_after_gnn - mem_before_gnn
     performance_metrics['peak_memory_mb']['Semantic Ego-GNN'] = mem_after_gnn
 
-    ablation_results, ablation_predictions = run_ablation_study(user_posts, user_labels, config)
+    ablation_results, ablation_predictions = run_ablation_study(
+        user_posts, user_labels, config, cached_features=cached_features
+    )
 
     all_results = {
         'roberta_baseline': roberta_result,
@@ -236,9 +264,13 @@ def main_with_results():
     saver = ResultsSaver(results_dir='results')
 
     print("\nLoading dataset...")
+    target_posts = config.get('data', {}).get('target_posts_per_class', 5000)
+    print(f"Configuration: {target_posts} posts per class (total: {target_posts * 2} posts)")
+
     raw_data = load_rmhd_data(
         data_path=config.get('data', {}).get('path', 'data/raw'),
-        target_posts_per_class=5000
+        target_posts_per_class=target_posts,
+        config=config
     )
 
     user_posts = raw_data['user_posts']

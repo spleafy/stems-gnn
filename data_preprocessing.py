@@ -13,20 +13,348 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 import re
 from datetime import datetime, timedelta
 import warnings
+import psutil
+import gc
+import pickle
+import hashlib
 warnings.filterwarnings('ignore')
 
-def load_rmhd_data(data_path, target_posts_per_class=5000):
+
+def get_data_hash(user_posts, user_labels):
     """
-    Load Reddit Mental Health Dataset with stratified sampling for depression detection.
+    Generate a unique hash for the dataset to enable caching.
+
+    Args:
+        user_posts (dict): Dictionary of user posts
+        user_labels (dict): Dictionary of user labels
+
+    Returns:
+        str: MD5 hash of the dataset
+    """
+    # Create a string representation of the dataset
+    data_str = f"{len(user_posts)}_{len(user_labels)}_{sorted(user_posts.keys())[:10]}"
+    return hashlib.md5(data_str.encode()).hexdigest()
+
+
+def save_cached_features(features, cache_path, data_hash):
+    """
+    Save extracted features to disk for reuse.
+
+    Args:
+        features (dict): Dictionary of extracted features
+        cache_path (str): Directory to save cached features
+        data_hash (str): Unique hash for the dataset
+    """
+    os.makedirs(cache_path, exist_ok=True)
+    cache_file = os.path.join(cache_path, f'features_cache_{data_hash}.pkl')
+
+    try:
+        with open(cache_file, 'wb') as f:
+            pickle.dump(features, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"Features cached to: {cache_file}")
+    except Exception as e:
+        print(f"Warning: Failed to cache features: {e}")
+
+
+def load_cached_features(cache_path, data_hash):
+    """
+    Load previously extracted features from disk.
+
+    Args:
+        cache_path (str): Directory containing cached features
+        data_hash (str): Unique hash for the dataset
+
+    Returns:
+        dict or None: Cached features if available, None otherwise
+    """
+    cache_file = os.path.join(cache_path, f'features_cache_{data_hash}.pkl')
+
+    if not os.path.exists(cache_file):
+        return None
+
+    try:
+        with open(cache_file, 'rb') as f:
+            features = pickle.load(f)
+        print(f"Loaded cached features from: {cache_file}")
+        return features
+    except Exception as e:
+        print(f"Warning: Failed to load cached features: {e}")
+        return None
+
+
+def get_available_memory_mb():
+    """
+    Get available system memory in megabytes.
+
+    Returns:
+        float: Available memory in MB
+    """
+    memory = psutil.virtual_memory()
+    return memory.available / (1024 * 1024)
+
+
+def load_rmhd_data_chunked(data_path, target_posts_per_class, chunk_size):
+    """
+    Load RMHD data in chunks to manage memory efficiently for large datasets.
+
+    Args:
+        data_path (str): Path to RMHD dataset files
+        target_posts_per_class (int): Total number of posts to load per class
+        chunk_size (int): Number of posts to load per chunk
+
+    Returns:
+        dict: Processed user data with posts, labels, metadata
+    """
+    print(f"Loading data in chunks of {chunk_size} posts per chunk...")
+
+    depression_subreddits = ['depression']
+    control_subreddits = [
+        'conspiracy', 'divorce', 'fitness', 'guns', 'jokes',
+        'legaladvice', 'meditation', 'parenting', 'personalfinance',
+        'relationships', 'teaching'
+    ]
+    time_periods = ['2018', '2019', 'pre', 'post']
+
+    # First pass: count available posts
+    depression_files = []
+    control_files = []
+
+    for subreddit in depression_subreddits:
+        for period in time_periods:
+            filename = f"{subreddit}_{period}_features_tfidf_256.csv"
+            filepath = os.path.join(data_path, filename)
+            if os.path.exists(filepath):
+                depression_files.append(filepath)
+
+    for subreddit in control_subreddits:
+        for period in time_periods:
+            filename = f"{subreddit}_{period}_features_tfidf_256.csv"
+            filepath = os.path.join(data_path, filename)
+            if os.path.exists(filepath):
+                control_files.append(filepath)
+
+    # Load depression data in chunks
+    depression_chunks = []
+    depression_count = 0
+
+    for filepath in depression_files:
+        if depression_count >= target_posts_per_class:
+            break
+
+        try:
+            # Load only what we need
+            needed = min(chunk_size, target_posts_per_class - depression_count)
+            df = pd.read_csv(filepath, nrows=needed, low_memory=False)
+
+            # Extract metadata from filename
+            filename = os.path.basename(filepath)
+            parts = filename.replace('_features_tfidf_256.csv', '').split('_')
+            subreddit = parts[0]
+            period = parts[1] if len(parts) > 1 else 'unknown'
+
+            df['subreddit'] = subreddit
+            df['time_period'] = period
+            df['is_depression'] = 1
+
+            depression_chunks.append(df)
+            depression_count += len(df)
+
+            print(f"  Depression data: loaded {len(df)} posts from {filename} ({depression_count}/{target_posts_per_class} total)")
+
+            # Free memory periodically
+            if len(depression_chunks) >= 5:
+                temp_df = pd.concat(depression_chunks, ignore_index=True)
+                depression_chunks = [temp_df]
+                gc.collect()
+
+        except Exception as e:
+            print(f"  Error loading {filepath}: {e}")
+
+    # Load control data in chunks
+    control_chunks = []
+    control_count = 0
+
+    for filepath in control_files:
+        if control_count >= target_posts_per_class:
+            break
+
+        try:
+            needed = min(chunk_size, target_posts_per_class - control_count)
+            df = pd.read_csv(filepath, nrows=needed, low_memory=False)
+
+            filename = os.path.basename(filepath)
+            parts = filename.replace('_features_tfidf_256.csv', '').split('_')
+            subreddit = parts[0]
+            period = parts[1] if len(parts) > 1 else 'unknown'
+
+            df['subreddit'] = subreddit
+            df['time_period'] = period
+            df['is_depression'] = 0
+
+            control_chunks.append(df)
+            control_count += len(df)
+
+            print(f"  Control data: loaded {len(df)} posts from {filename} ({control_count}/{target_posts_per_class} total)")
+
+            # Free memory periodically
+            if len(control_chunks) >= 5:
+                temp_df = pd.concat(control_chunks, ignore_index=True)
+                control_chunks = [temp_df]
+                gc.collect()
+
+        except Exception as e:
+            print(f"  Error loading {filepath}: {e}")
+
+    # Combine all chunks
+    if depression_chunks:
+        depression_df = pd.concat(depression_chunks, ignore_index=True)
+        if len(depression_df) > target_posts_per_class:
+            depression_df = depression_df.sample(n=target_posts_per_class, random_state=42)
+    else:
+        depression_df = pd.DataFrame()
+
+    if control_chunks:
+        control_df = pd.concat(control_chunks, ignore_index=True)
+        if len(control_df) > target_posts_per_class:
+            control_df = control_df.sample(n=target_posts_per_class, random_state=42)
+    else:
+        control_df = pd.DataFrame()
+
+    # Final combination
+    if not depression_df.empty and not control_df.empty:
+        combined_df = pd.concat([depression_df, control_df], ignore_index=True)
+    elif not depression_df.empty:
+        combined_df = depression_df
+    elif not control_df.empty:
+        combined_df = control_df
+    else:
+        raise ValueError("No valid data found after chunked loading")
+
+    print(f"Chunked loading complete: {len(combined_df)} posts loaded")
+
+    # Process users from dataset
+    print(f"\nProcessing users from dataset...")
+
+    user_posts = {}
+    user_labels = {}
+    user_metadata = {}
+    temporal_windows = {}
+
+    # Group by author
+    for author, group in combined_df.groupby('author'):
+        # Collect all posts for this user
+        posts = group['post'].tolist()
+        user_posts[author] = posts
+
+        # Determine label (majority vote based on subreddit)
+        depression_posts = sum(group['is_depression'])
+        user_labels[author] = 1 if depression_posts > len(group) / 2 else 0
+
+        # Store metadata
+        user_metadata[author] = {
+            'subreddits': group['subreddit'].unique().tolist(),
+            'post_count': len(posts),
+            'first_post_date': group['date'].min() if 'date' in group.columns else None,
+            'last_post_date': group['date'].max() if 'date' in group.columns else None
+        }
+
+        # Temporal windows
+        temporal_windows[author] = {
+            'pre_pandemic': group[group['time_period'] == 'pre']['post'].tolist(),
+            'year_2018': group[group['time_period'] == '2018']['post'].tolist(),
+            'year_2019': group[group['time_period'] == '2019']['post'].tolist(),
+            'post_pandemic': group[group['time_period'] == 'post']['post'].tolist()
+        }
+
+    # Print statistics
+    print(f"\nDataset statistics:")
+    print(f"  Total users: {len(user_posts)}")
+    print(f"  Total posts: {len(combined_df)}")
+
+    post_counts = [len(posts) for posts in user_posts.values()]
+    if post_counts:
+        avg_posts = np.mean(post_counts)
+        median_posts = np.median(post_counts)
+        print(f"  Average posts per user: {avg_posts:.1f}")
+        print(f"  Median posts per user: {median_posts:.0f}")
+        print(f"  Post count range: {min(post_counts)}-{max(post_counts)}")
+
+        # Class distribution
+        depression_users = sum(user_labels.values())
+        control_users = len(user_labels) - depression_users
+        print(f"\n  Class distribution:")
+        print(f"    Depression users: {depression_users}")
+        print(f"    Control users: {control_users}")
+        print(f"    Class balance: {depression_users / len(user_labels) * 100:.1f}% depression")
+
+    return {
+        'user_posts': user_posts,
+        'user_labels': user_labels,
+        'user_metadata': user_metadata,
+        'temporal_windows': temporal_windows,
+        'combined_df': combined_df,
+        'depression_subreddits': depression_subreddits,
+        'control_subreddits': control_subreddits
+    }
+
+
+def estimate_memory_usage(num_posts, avg_post_length=500):
+    """
+    Estimate memory usage for loading a given number of posts.
+
+    Args:
+        num_posts (int): Number of posts to load
+        avg_post_length (int): Average post length in characters
+
+    Returns:
+        float: Estimated memory usage in MB
+    """
+    # Rough estimate: text + metadata + features
+    text_mb = (num_posts * avg_post_length) / (1024 * 1024)
+    metadata_mb = (num_posts * 200) / (1024 * 1024)  # Assuming 200 bytes per post metadata
+    features_mb = (num_posts * 300 * 8) / (1024 * 1024)  # 300 features * 8 bytes per float
+
+    total_mb = text_mb + metadata_mb + features_mb
+    return total_mb * 1.5  # Add 50% safety margin
+
+def load_rmhd_data(data_path, target_posts_per_class=5000, config=None):
+    """
+    Load Reddit Mental Health Dataset with stratified sampling and memory-efficient chunked loading.
 
     Args:
         data_path (str): Path to RMHD dataset files
         target_posts_per_class (int): Number of posts to sample per class (depression/control)
+        config (dict): Configuration dictionary with memory settings
 
     Returns:
         dict: Processed user data with posts, labels, metadata
     """
     print(f"Loading dataset from {data_path}...")
+
+    # Check memory constraints
+    available_memory = get_available_memory_mb()
+    estimated_usage = estimate_memory_usage(target_posts_per_class * 2)
+
+    print(f"Available memory: {available_memory:.0f} MB")
+    print(f"Estimated memory needed: {estimated_usage:.0f} MB")
+
+    # Determine if chunked loading is needed
+    enable_chunked = False
+    chunk_size = target_posts_per_class
+
+    if config:
+        enable_chunked = config.get('data', {}).get('enable_chunked_loading', False)
+        chunk_size = config.get('data', {}).get('chunk_size', 10000)
+        max_memory_mb = config.get('data', {}).get('max_memory_mb', 8192)
+
+        if estimated_usage > max_memory_mb * 0.7:  # Use 70% threshold
+            enable_chunked = True
+            print(f"Warning: Estimated memory usage ({estimated_usage:.0f} MB) exceeds 70% of limit ({max_memory_mb} MB)")
+            print(f"Enabling chunked loading to manage memory efficiently")
+
+    if enable_chunked and target_posts_per_class > chunk_size:
+        print(f"Using chunked loading strategy: {chunk_size} posts per chunk")
+        return load_rmhd_data_chunked(data_path, target_posts_per_class, chunk_size)
 
     depression_subreddits = ['depression']
 
@@ -40,6 +368,8 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
     depression_data = []
     control_data = []
 
+    # Load depression data
+    print("Loading depression subreddit data...")
     for subreddit in depression_subreddits:
         for period in time_periods:
             filename = f"{subreddit}_{period}_features_tfidf_256.csv"
@@ -47,7 +377,7 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
 
             if os.path.exists(filepath):
                 try:
-                    df = pd.read_csv(filepath)
+                    df = pd.read_csv(filepath, low_memory=False)
                     df['subreddit'] = subreddit
                     df['time_period'] = period
                     df['is_depression'] = 1
@@ -55,6 +385,8 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
                 except Exception as e:
                     print(f"Error loading {filename}: {e}")
 
+    # Load control data
+    print("Loading control subreddit data...")
     for subreddit in control_subreddits:
         for period in time_periods:
             filename = f"{subreddit}_{period}_features_tfidf_256.csv"
@@ -62,7 +394,7 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
 
             if os.path.exists(filepath):
                 try:
-                    df = pd.read_csv(filepath)
+                    df = pd.read_csv(filepath, low_memory=False)
                     df['subreddit'] = subreddit
                     df['time_period'] = period
                     df['is_depression'] = 0
@@ -73,17 +405,39 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
     if not depression_data and not control_data:
         raise ValueError("No data files found. Check the data path.")
 
+    # Combine and sample depression data
     if depression_data:
+        print(f"Combining {len(depression_data)} depression data files...")
         depression_df = pd.concat(depression_data, ignore_index=True)
+        print(f"Total depression posts available: {len(depression_df)}")
+
         if len(depression_df) > target_posts_per_class:
+            print(f"Sampling {target_posts_per_class} depression posts...")
             depression_df = depression_df.sample(n=target_posts_per_class, random_state=42)
+        else:
+            print(f"Warning: Only {len(depression_df)} depression posts available (requested {target_posts_per_class})")
+
+        # Free memory
+        del depression_data
+        gc.collect()
     else:
         depression_df = pd.DataFrame()
 
+    # Combine and sample control data
     if control_data:
+        print(f"Combining {len(control_data)} control data files...")
         control_df = pd.concat(control_data, ignore_index=True)
+        print(f"Total control posts available: {len(control_df)}")
+
         if len(control_df) > target_posts_per_class:
+            print(f"Sampling {target_posts_per_class} control posts...")
             control_df = control_df.sample(n=target_posts_per_class, random_state=42)
+        else:
+            print(f"Warning: Only {len(control_df)} control posts available (requested {target_posts_per_class})")
+
+        # Free memory
+        del control_data
+        gc.collect()
     else:
         control_df = pd.DataFrame()
 
@@ -96,19 +450,27 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
     else:
         raise ValueError("No valid data found after sampling")
 
-    print(f"Dataset: {len(combined_df)} posts")
+    print(f"Dataset loaded successfully: {len(combined_df)} posts")
+
+    # Process users - each post represents one user's contribution
+    print(f"\nProcessing users from dataset...")
+
     user_posts = {}
     user_labels = {}
     user_metadata = {}
     temporal_windows = {}
 
+    # Group by author
     for author, group in combined_df.groupby('author'):
+        # Collect all posts for this user
         posts = group['post'].tolist()
         user_posts[author] = posts
 
+        # Determine label (majority vote based on subreddit)
         depression_posts = sum(group['is_depression'])
         user_labels[author] = 1 if depression_posts > len(group) / 2 else 0
 
+        # Store metadata
         user_metadata[author] = {
             'subreddits': group['subreddit'].unique().tolist(),
             'post_count': len(posts),
@@ -116,6 +478,7 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
             'last_post_date': group['date'].max() if 'date' in group.columns else None
         }
 
+        # Temporal windows
         temporal_windows[author] = {
             'pre_pandemic': group[group['time_period'] == 'pre']['post'].tolist(),
             'year_2018': group[group['time_period'] == '2018']['post'].tolist(),
@@ -123,7 +486,26 @@ def load_rmhd_data(data_path, target_posts_per_class=5000):
             'post_pandemic': group[group['time_period'] == 'post']['post'].tolist()
         }
 
-    print(f"Processed {len(user_posts)} users")
+    # Print statistics
+    print(f"\nDataset statistics:")
+    print(f"  Total users: {len(user_posts)}")
+    print(f"  Total posts: {len(combined_df)}")
+
+    post_counts = [len(posts) for posts in user_posts.values()]
+    if post_counts:
+        avg_posts = np.mean(post_counts)
+        median_posts = np.median(post_counts)
+        print(f"  Average posts per user: {avg_posts:.1f}")
+        print(f"  Median posts per user: {median_posts:.0f}")
+        print(f"  Post count range: {min(post_counts)}-{max(post_counts)}")
+
+        # Class distribution
+        depression_users = sum(user_labels.values())
+        control_users = len(user_labels) - depression_users
+        print(f"\n  Class distribution:")
+        print(f"    Depression users: {depression_users}")
+        print(f"    Control users: {control_users}")
+        print(f"    Class balance: {depression_users / len(user_labels) * 100:.1f}% depression")
 
     return {
         'user_posts': user_posts,
@@ -155,10 +537,41 @@ def preprocess_text(text):
 
     return text
 
-def extract_liwc_features(texts):
+def extract_liwc_features(texts, batch_size=1000):
     """
-    Extract comprehensive LIWC-style linguistic features from texts.
+    Extract comprehensive LIWC-style linguistic features from texts with batch processing.
     Implements the full LIWC psychological category framework for depression detection.
+
+    Args:
+        texts (list): List of text documents
+        batch_size (int): Number of texts to process per batch for memory efficiency
+
+    Returns:
+        pd.DataFrame: LIWC features per document
+    """
+    if len(texts) <= batch_size:
+        # Process all at once if small enough
+        return _extract_liwc_features_batch(texts)
+
+    # Process in batches
+    print(f"Processing {len(texts)} texts in batches of {batch_size}...")
+    all_features = []
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i+batch_size]
+        batch_features = _extract_liwc_features_batch(batch)
+        all_features.append(batch_features)
+
+        if (i // batch_size + 1) % 10 == 0:
+            print(f"  Processed {min(i+batch_size, len(texts))}/{len(texts)} texts")
+            gc.collect()
+
+    return pd.concat(all_features, ignore_index=True)
+
+
+def _extract_liwc_features_batch(texts):
+    """
+    Extract LIWC features for a single batch of texts.
 
     Args:
         texts (list): List of text documents

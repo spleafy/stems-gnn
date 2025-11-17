@@ -295,7 +295,7 @@ class LightweightSemanticProcessor:
         print(f"Built {len(ego_networks)} ego networks")
         return ego_networks
 
-def train_memory_efficient_baseline(user_posts, user_labels, config, return_predictions=False, save_model=False, results_saver=None):
+def train_memory_efficient_baseline(user_posts, user_labels, config, return_predictions=False, save_model=False, results_saver=None, cached_features=None):
     """
     Train baseline with aggressive memory management.
 
@@ -306,24 +306,35 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
         return_predictions: If True, returns (y_true, y_prob) for ROC curves
         save_model: If True and results_saver is provided, saves model checkpoint
         results_saver: ResultsSaver instance for saving model checkpoints
+        cached_features: Pre-extracted features from UnifiedFeatureExtractor (optional)
     """
     print("=== Training Memory-Efficient Baseline ===")
     print(f"Initial memory: {get_memory_usage():.1f} MB")
 
-    max_users = 300
-    user_subset = dict(list(user_posts.items())[:max_users])
+    # Use cached text features if available
+    if cached_features is not None:
+        print("Using cached text features (skipping redundant text extraction)")
+        texts = []
+        labels = []
+        for user_id in cached_features['user_ids'][:300]:
+            if user_id in cached_features['text_features'] and user_id in cached_features['labels']:
+                texts.append(cached_features['text_features'][user_id][:300])
+                labels.append(cached_features['labels'][user_id])
+    else:
+        max_users = 300
+        user_subset = dict(list(user_posts.items())[:max_users])
 
-    texts = []
-    labels = []
+        texts = []
+        labels = []
 
-    for user_id, posts in user_subset.items():
-        if user_id in user_labels:
-            first_quarter = posts[:max(3, len(posts)//4)]
-            user_text = " ".join(str(post) for post in first_quarter)[:300]
+        for user_id, posts in user_subset.items():
+            if user_id in user_labels:
+                first_quarter = posts[:max(3, len(posts)//4)]
+                user_text = " ".join(str(post) for post in first_quarter)[:300]
 
-            if len(user_text.strip()) > 10:
-                texts.append(user_text)
-                labels.append(user_labels[user_id])
+                if len(user_text.strip()) > 10:
+                    texts.append(user_text)
+                    labels.append(user_labels[user_id])
 
     print(f"Training on {len(texts)} users")
 
