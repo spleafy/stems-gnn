@@ -25,7 +25,19 @@ data:
     - "relationships"
     - "teaching"
 
-  target_posts_per_class: 50000
+  # Load 1000 posts per class (depression/control)
+  # Most users have 1 post, so this yields ~1000 users per class after grouping
+  target_posts_per_class: 1000
+
+  # Sample sizes for training (CRITICAL for statistical power)
+  # FAIR COMPARISON: Both models use SAME users with SAME splits
+  max_users: 2000  # Target: 1000 depression + 1000 control (after stratified sampling)
+  min_users_for_training: 100  # Minimum viable sample size
+
+  # Shared train/val/test splits (applied BEFORE model training)
+  test_size: 0.2    # 20% held out for final testing (400 users)
+  val_size: 0.2     # 20% of remaining for validation (320 users from 1600)
+                    # Results: 1280 train, 320 val, 400 test
 
   enable_chunked_loading: true
   chunk_size: 25000
@@ -84,12 +96,12 @@ models:
       temporal_dims: 9
 
 training:
-  epochs: 100
+  epochs: 20
   batch_size: 32
   learning_rate: 0.001
   weight_decay: 0.0001
 
-  patience: 20
+  patience: 5
   min_delta: 0.001
 
   optimizer: "adam"

@@ -128,9 +128,16 @@ class MemoryEfficientRoBERTa(nn.Module):
         device = next(self.parameters()).device
         encoded = {k: v.to(device) for k, v in encoded.items()}
 
-        with torch.cuda.amp.autocast() if torch.cuda.is_available() else torch.no_grad():
-            outputs = self.roberta(**encoded)
-            cls_embeddings = outputs.last_hidden_state[:, 0, :]
+        # Use appropriate context manager based on device
+        if torch.cuda.is_available():
+            with torch.cuda.amp.autocast():
+                outputs = self.roberta(**encoded)
+                cls_embeddings = outputs.last_hidden_state[:, 0, :]
+        else:
+            # No autocast on CPU, but still disable gradient computation
+            with torch.no_grad():
+                outputs = self.roberta(**encoded)
+                cls_embeddings = outputs.last_hidden_state[:, 0, :]
 
         del encoded, outputs
         clear_memory()
@@ -295,9 +302,9 @@ class LightweightSemanticProcessor:
         print(f"Built {len(ego_networks)} ego networks")
         return ego_networks
 
-def train_memory_efficient_baseline(user_posts, user_labels, config, return_predictions=False, save_model=False, results_saver=None, cached_features=None):
+def train_memory_efficient_baseline(user_posts, user_labels, config, return_predictions=False, save_model=False, results_saver=None, cached_features=None, data_splits=None):
     """
-    Train baseline with aggressive memory management.
+    Train baseline with aggressive memory management using shared data splits.
 
     Args:
         user_posts: User post data
@@ -306,46 +313,47 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
         return_predictions: If True, returns (y_true, y_prob) for ROC curves
         save_model: If True and results_saver is provided, saves model checkpoint
         results_saver: ResultsSaver instance for saving model checkpoints
-        cached_features: Pre-extracted features from UnifiedFeatureExtractor (optional)
+        cached_features: Pre-extracted features from UnifiedFeatureExtractor (required)
+        data_splits: Shared train/val/test splits (required for fair comparison)
     """
     print("=== Training Memory-Efficient Baseline ===")
     print(f"Initial memory: {get_memory_usage():.1f} MB")
 
-    # Use cached text features if available
-    if cached_features is not None:
-        print("Using cached text features (skipping redundant text extraction)")
-        texts = []
-        labels = []
-        for user_id in cached_features['user_ids'][:300]:
-            if user_id in cached_features['text_features'] and user_id in cached_features['labels']:
-                texts.append(cached_features['text_features'][user_id][:300])
-                labels.append(cached_features['labels'][user_id])
-    else:
-        max_users = 300
-        user_subset = dict(list(user_posts.items())[:max_users])
+    if cached_features is None:
+        raise ValueError("cached_features is required for RoBERTa baseline")
 
-        texts = []
-        labels = []
+    if data_splits is None:
+        raise ValueError("data_splits is required for fair comparison with STEMS-GNN")
 
-        for user_id, posts in user_subset.items():
-            if user_id in user_labels:
-                first_quarter = posts[:max(3, len(posts)//4)]
-                user_text = " ".join(str(post) for post in first_quarter)[:300]
+    # Use SHARED splits (same as STEMS-GNN)
+    train_ids = data_splits['train_ids']
+    val_ids = data_splits['val_ids']
+    test_ids = data_splits['test_ids']
 
-                if len(user_text.strip()) > 10:
-                    texts.append(user_text)
-                    labels.append(user_labels[user_id])
+    print(f"Using shared data splits:")
+    print(f"  Train: {len(train_ids)} users")
+    print(f"  Val:   {len(val_ids)} users (used for early stopping)")
+    print(f"  Test:  {len(test_ids)} users")
 
-    print(f"Training on {len(texts)} users")
+    # Extract text features for train and test sets
+    train_texts = []
+    train_labels = []
+    for user_id in train_ids:
+        if user_id in cached_features['text_features'] and user_id in cached_features['labels']:
+            train_texts.append(cached_features['text_features'][user_id][:300])
+            train_labels.append(cached_features['labels'][user_id])
 
-    if len(texts) < 10:
+    test_texts = []
+    test_labels = []
+    for user_id in test_ids:
+        if user_id in cached_features['text_features'] and user_id in cached_features['labels']:
+            test_texts.append(cached_features['text_features'][user_id][:300])
+            test_labels.append(cached_features['labels'][user_id])
+
+    print(f"Data prepared: {len(train_texts)} train, {len(test_texts)} test")
+
+    if len(train_texts) < 10 or len(test_texts) < 10:
         return {'error': 'Insufficient data'}
-
-    split_idx = int(0.8 * len(texts))
-    train_texts = texts[:split_idx]
-    test_texts = texts[split_idx:]
-    train_labels = labels[:split_idx]
-    test_labels = labels[split_idx:]
 
     results = {}
 
@@ -395,20 +403,49 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
         device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
         print(f"Using device: {device}")
 
-        model = MemoryEfficientRoBERTa(max_length=128, dropout=0.3).to(device)
+        # Get hyperparameters from config for fair comparison with STEMS-GNN
+        dropout = config.get('models', {}).get('baseline', {}).get('dropout', 0.3)
+        learning_rate = config.get('training', {}).get('learning_rate', 0.001)
+        weight_decay = config.get('training', {}).get('weight_decay', 0.0001)
+        batch_size = config.get('training', {}).get('batch_size', 32)
+        num_epochs = config.get('training', {}).get('epochs', 16)
+        patience = config.get('training', {}).get('patience', 5)
+        min_delta = config.get('training', {}).get('min_delta', 0.001)
+
+        model = MemoryEfficientRoBERTa(max_length=128, dropout=dropout).to(device)
 
         if model.use_roberta:
             print("Transformer model loaded successfully")
+            print(f"Hyperparameters: lr={learning_rate}, batch_size={batch_size}, weight_decay={weight_decay}")
+            print(f"Training: epochs={num_epochs}, patience={patience}, min_delta={min_delta}")
 
-            optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4)
+            # Use same optimizer as STEMS-GNN for fair comparison
+            optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
             criterion = nn.CrossEntropyLoss()
 
-            batch_size = 2
-            num_epochs = 3
+            # Early stopping variables (using F1 score for consistency with STEMS-GNN)
+            best_val_f1 = 0.0
+            best_model_state = None
+            patience_counter = 0
+
+            # Prepare validation data (use val_ids from data_splits)
+            val_texts = []
+            val_labels_list = []
+            for user_id in val_ids:
+                if user_id in cached_features['text_features'] and user_id in cached_features['labels']:
+                    val_texts.append(cached_features['text_features'][user_id][:300])
+                    val_labels_list.append(cached_features['labels'][user_id])
+
+            # Defensive check: ensure we have validation data
+            if len(val_texts) == 0:
+                print("WARNING: No validation data available. Early stopping will be disabled.")
+                print("Falling back to training without early stopping...")
+                patience = num_epochs + 1  # Disable early stopping
 
             model.train()
 
             for epoch in range(num_epochs):
+                # Training phase
                 total_loss = 0
                 num_batches = 0
 
@@ -438,17 +475,67 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
                         else:
                             raise e
 
-                if num_batches > 0:
-                    avg_loss = total_loss / num_batches
-                    print(f"Epoch {epoch}, Loss: {avg_loss:.4f}")
+                train_loss = total_loss / num_batches if num_batches > 0 else 0
+
+                # Validation phase (for early stopping using F1 score)
+                model.eval()
+                val_predictions = []
+                val_true_labels = []
+
+                with torch.no_grad():
+                    for i in range(0, len(val_texts), batch_size):
+                        batch_texts = val_texts[i:i+batch_size]
+                        batch_labels = torch.LongTensor(val_labels_list[i:i+batch_size]).to(device)
+
+                        try:
+                            logits = model(batch_texts)
+                            preds = torch.argmax(logits, dim=1).cpu().numpy()
+                            val_predictions.extend(preds)
+                            val_true_labels.extend(batch_labels.cpu().numpy())
+                        except RuntimeError as e:
+                            if "out of memory" in str(e):
+                                continue
+                            else:
+                                raise e
+
+                # Compute validation F1 score
+                if len(val_predictions) > 0 and len(set(val_true_labels)) > 1:
+                    val_f1 = f1_score(val_true_labels, val_predictions, zero_division=0)
+                else:
+                    val_f1 = 0.0
+
+                print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {train_loss:.4f}, Val F1: {val_f1:.4f}")
+
+                # Early stopping check (using F1 with min_delta)
+                if val_f1 > best_val_f1 + min_delta:
+                    best_val_f1 = val_f1
+                    best_model_state = model.state_dict().copy()
+                    patience_counter = 0
+                    print(f"  New best model (val_f1: {best_val_f1:.4f})")
+                else:
+                    patience_counter += 1
+                    print(f"  No improvement (patience: {patience_counter}/{patience})")
+
+                if patience_counter >= patience:
+                    print(f"Early stopping triggered at epoch {epoch+1}")
+                    break
+
+                model.train()
+
+            # Restore best model
+            if best_model_state is not None:
+                model.load_state_dict(best_model_state)
+                print(f"Restored best model with val_f1: {best_val_f1:.4f}")
 
             model.eval()
             transformer_preds = []
             transformer_probs = []
+            transformer_test_labels = []  # Track corresponding labels for alignment
 
             with torch.no_grad():
                 for i in range(0, len(test_texts), batch_size):
                     batch_texts = test_texts[i:i+batch_size]
+                    batch_size_actual = len(batch_texts)
 
                     try:
                         logits = model(batch_texts)
@@ -459,20 +546,25 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
 
                         transformer_preds.extend(preds)
                         transformer_probs.extend(prob_pos)
+                        # Keep labels aligned with predictions
+                        transformer_test_labels.extend(test_labels[i:i+batch_size_actual])
 
                     except RuntimeError as e:
                         if "out of memory" in str(e):
+                            print(f"  WARNING: OOM on test batch at index {i}, skipping {batch_size_actual} samples")
+                            clear_memory()
                             continue
                         else:
                             raise e
 
             if len(transformer_preds) > 0:
+                # Use aligned labels instead of slicing
                 transformer_metrics = {
-                    'accuracy': accuracy_score(test_labels[:len(transformer_preds)], transformer_preds),
-                    'precision': precision_score(test_labels[:len(transformer_preds)], transformer_preds, zero_division=0),
-                    'recall': recall_score(test_labels[:len(transformer_preds)], transformer_preds, zero_division=0),
-                    'f1': f1_score(test_labels[:len(transformer_preds)], transformer_preds, zero_division=0),
-                    'auc': roc_auc_score(test_labels[:len(transformer_preds)], transformer_probs) if len(set(test_labels[:len(transformer_preds)])) > 1 else 0.5
+                    'accuracy': accuracy_score(transformer_test_labels, transformer_preds),
+                    'precision': precision_score(transformer_test_labels, transformer_preds, zero_division=0),
+                    'recall': recall_score(transformer_test_labels, transformer_preds, zero_division=0),
+                    'f1': f1_score(transformer_test_labels, transformer_preds, zero_division=0),
+                    'auc': roc_auc_score(transformer_test_labels, transformer_probs) if len(set(transformer_test_labels)) > 1 else 0.5
                 }
 
                 results['memory_efficient_transformer'] = {'metrics': transformer_metrics}
@@ -483,10 +575,15 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
                     model_metadata = {
                         'model_type': 'RoBERTa',
                         'max_length': 128,
-                        'dropout': 0.3,
+                        'dropout': dropout,
                         'batch_size': batch_size,
                         'num_epochs': num_epochs,
-                        'learning_rate': 5e-4,
+                        'learning_rate': learning_rate,
+                        'weight_decay': weight_decay,
+                        'patience': patience,
+                        'min_delta': min_delta,
+                        'best_val_f1': best_val_f1 if best_model_state is not None else None,
+                        'early_stopped': patience_counter >= patience,
                         'metrics': transformer_metrics,
                         'training_samples': len(train_texts),
                         'test_samples': len(test_labels)
@@ -503,7 +600,8 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
 
     if return_predictions:
         if 'memory_efficient_transformer' in results:
-            return results, (test_labels[:len(transformer_preds)], transformer_probs)
+            # Use aligned labels that correspond to successful predictions
+            return results, (transformer_test_labels, transformer_probs)
         elif 'tfidf_logistic' in results:
             return results, (test_labels, lr_prob)
         else:
