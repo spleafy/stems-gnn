@@ -111,7 +111,7 @@ def run_ablation_study(user_posts, user_labels, config, cached_features=None, da
         'linguistic_only': (1.0, 0.0, 0.0),
         'temporal_only': (0.0, 1.0, 0.0),
         'psychological_only': (0.0, 0.0, 1.0),
-        'full_combined': (0.4, 0.3, 0.3)
+        'full_combined': (0.6, 0.1, 0.3)
     }
 
     ablation_results = {}

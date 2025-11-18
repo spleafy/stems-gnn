@@ -25,19 +25,13 @@ data:
     - "relationships"
     - "teaching"
 
-  # Load 1000 posts per class (depression/control)
-  # Most users have 1 post, so this yields ~1000 users per class after grouping
   target_posts_per_class: 1000
 
-  # Sample sizes for training (CRITICAL for statistical power)
-  # FAIR COMPARISON: Both models use SAME users with SAME splits
-  max_users: 2000  # Target: 1000 depression + 1000 control (after stratified sampling)
-  min_users_for_training: 100  # Minimum viable sample size
+  max_users: 2000
+  min_users_for_training: 100
 
-  # Shared train/val/test splits (applied BEFORE model training)
-  test_size: 0.2    # 20% held out for final testing (400 users)
-  val_size: 0.2     # 20% of remaining for validation (320 users from 1600)
-                    # Results: 1280 train, 320 val, 400 test
+  test_size: 0.2
+  val_size: 0.2
 
   enable_chunked_loading: true
   chunk_size: 25000
@@ -67,6 +61,16 @@ ego_network:
   construction_method: "threshold"
   temporal_snapshots: false
   snapshot_intervals: ["early_2018", "mid_2018", "late_2018"]
+
+  similarity_weights:
+    alpha: 0.6  # Linguistic features (semantic 64-dim + LIWC linguistic 30-dim)
+    beta: 0.1   # Temporal features (9-dim posting patterns)
+    gamma: 0.3  # Psychological features (LIWC psychological 32-dim)
+
+  adaptive_threshold: true
+  target_edge_percentile: 75
+
+  preserve_hop_structure_only: true
 
 models:
   baseline:

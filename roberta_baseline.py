@@ -408,7 +408,8 @@ def train_memory_efficient_baseline(user_posts, user_labels, config, return_pred
         learning_rate = config.get('training', {}).get('learning_rate', 0.001)
         weight_decay = config.get('training', {}).get('weight_decay', 0.0001)
         batch_size = config.get('training', {}).get('batch_size', 32)
-        num_epochs = config.get('training', {}).get('epochs', 16)
+        # num_epochs = config.get('training', {}).get('epochs', 16)
+        num_epochs = 1
         patience = config.get('training', {}).get('patience', 5)
         min_delta = config.get('training', {}).get('min_delta', 0.001)
 
