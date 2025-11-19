@@ -116,7 +116,7 @@ class CorrectSemanticProcessor:
         sim_mean = np.mean(similarity_matrix)
         sim_std = np.std(similarity_matrix)
         sim_max = np.max(similarity_matrix)
-        above_threshold = np.sum(similarity_matrix >= threshold) - len(users)  # Exclude diagonal
+        above_threshold = np.sum(similarity_matrix >= threshold) - len(users)
         total_pairs = len(users) * (len(users) - 1)
         sparsity = above_threshold / total_pairs if total_pairs > 0 else 0
 

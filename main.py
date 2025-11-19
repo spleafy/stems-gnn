@@ -126,7 +126,7 @@ def run_ablation_study(user_posts, user_labels, config, cached_features=None, da
                 similarity_weights=weights,
                 return_predictions=True,
                 cached_features=cached_features,
-                data_splits=data_splits  # Use shared splits for ablations too
+                data_splits=data_splits
             )
 
             if 'correct_semantic_gnn' in result:
@@ -174,7 +174,6 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
 
     process = psutil.Process(os.getpid())
 
-    # Extract features ONCE for all models
     print("\n" + "="*60)
     print("Extracting Features (shared across all models)")
     print("="*60)
@@ -182,10 +181,8 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
     feature_extractor = UnifiedFeatureExtractor(config)
     start_feature_extraction = time.time()
 
-    # Get combined_df for temporal feature extraction
     combined_df = raw_data.get('combined_df', None)
 
-    # Extract features for max_users (5K depression + 5K control)
     max_users_config = config.get('data', {}).get('max_users', 10000)
     cached_features = feature_extractor.extract_all_features(
         user_posts, user_labels, combined_df=combined_df,
@@ -196,7 +193,6 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
     print(f"\nFeature extraction complete in {end_feature_extraction - start_feature_extraction:.1f} seconds")
     print(f"Features will be reused for baseline, STEMS-GNN, and all ablation studies\n")
 
-    # Create SHARED train/val/test splits for fair comparison
     print("\n" + "="*60)
     print("Creating Shared Train/Val/Test Splits")
     print("="*60)
@@ -209,7 +205,6 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
     test_size = config.get('data', {}).get('test_size', 0.2)
     val_size = config.get('data', {}).get('val_size', 0.2)
 
-    # First split: 80% train+val, 20% test
     train_val_ids, test_ids = train_test_split(
         all_user_ids,
         test_size=test_size,
@@ -217,7 +212,6 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
         stratify=all_labels
     )
 
-    # Second split: from train+val, create train and val
     train_val_labels = [cached_features['labels'][uid] for uid in train_val_ids]
     train_ids, val_ids = train_test_split(
         train_val_ids,
@@ -231,14 +225,12 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
     print(f"  Val:   {len(val_ids)} users ({len(val_ids)/len(all_user_ids)*100:.1f}%)")
     print(f"  Test:  {len(test_ids)} users ({len(test_ids)/len(all_user_ids)*100:.1f}%)")
 
-    # Store splits in a dict for passing to models
     data_splits = {
         'train_ids': train_ids,
         'val_ids': val_ids,
         'test_ids': test_ids
     }
 
-    # Training models using cached features AND shared splits
     print("\nTraining RoBERTa Baseline...")
     mem_before_rb = process.memory_info().rss / 1024 / 1024
     start_time_rb = time.time()
@@ -247,7 +239,7 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
         user_posts, user_labels, config, return_predictions=True,
         save_model=save_models, results_saver=results_saver,
         cached_features=cached_features,
-        data_splits=data_splits  # Use shared splits
+        data_splits=data_splits
     )
 
     end_time_rb = time.time()
@@ -265,7 +257,7 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
         user_posts, user_labels, config, return_predictions=True,
         save_model=save_models, results_saver=results_saver,
         cached_features=cached_features,
-        data_splits=data_splits  # Use shared splits
+        data_splits=data_splits
     )
 
     end_time_gnn = time.time()
@@ -277,7 +269,7 @@ def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None,
 
     ablation_results, ablation_predictions = run_ablation_study(
         user_posts, user_labels, config, cached_features=cached_features,
-        data_splits=data_splits  # Pass shared splits to ablation study
+        data_splits=data_splits
     )
 
     all_results = {
