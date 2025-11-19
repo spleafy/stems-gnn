@@ -96,8 +96,13 @@ class UnifiedFeatureExtractor:
                 'combined_features': dict of full 135-dim vectors
             }
         """
+        semantic_dims = self.config.get('models', {}).get('semantic_gnn', {}).get('feature_breakdown', {}).get('semantic_dims', 64)
+        liwc_dims = self.config.get('models', {}).get('semantic_gnn', {}).get('feature_breakdown', {}).get('liwc_dims', 60)
+        temporal_dims = self.config.get('models', {}).get('semantic_gnn', {}).get('feature_breakdown', {}).get('temporal_dims', 9)
+        total_dims = semantic_dims + liwc_dims + temporal_dims
+
         print("\n1. Loading RMHD precomputed LIWC features...")
-        all_liwc_features = self._load_rmhd_liwc_features()
+        all_liwc_features = self._load_rmhd_liwc_features(liwc_dims)
 
         print(f"\n2. Performing stratified user sampling...")
         depression_users = [uid for uid in user_posts.keys() if user_labels[uid] == 1]
@@ -137,6 +142,11 @@ class UnifiedFeatureExtractor:
         combined_features = {}
         valid_users = []
 
+        semantic_dims = self.config.get('models', {}).get('semantic_gnn', {}).get('feature_breakdown', {}).get('semantic_dims', 64)
+        liwc_dims = self.config.get('models', {}).get('semantic_gnn', {}).get('feature_breakdown', {}).get('liwc_dims', 62)
+        temporal_dims = self.config.get('models', {}).get('semantic_gnn', {}).get('feature_breakdown', {}).get('temporal_dims', 9)
+        total_dims = semantic_dims + liwc_dims + temporal_dims
+        
         self._init_sbert_model()
 
         batch_size = 50
@@ -153,20 +163,20 @@ class UnifiedFeatureExtractor:
                     text_sample = user_text[:500]
                     if len(text_sample.strip()) > 20:
                         embedding = self.sbert_model.encode([text_sample], show_progress_bar=False)[0]
-                        semantic_embeddings[user_id] = embedding[:64]
+                        semantic_embeddings[user_id] = embedding[:semantic_dims]
                     else:
-                        semantic_embeddings[user_id] = np.zeros(64)
+                        semantic_embeddings[user_id] = np.zeros(semantic_dims)
 
                     if user_id in all_liwc_features:
                         liwc_features[user_id] = all_liwc_features[user_id]
                     else:
-                        liwc_features[user_id] = self._extract_basic_liwc(user_text)
+                        liwc_features[user_id] = self._extract_basic_liwc(user_text, liwc_dims)
 
                     if combined_df is not None and user_id in combined_df['author'].values:
                         user_group = combined_df[combined_df['author'] == user_id]
-                        temporal_features[user_id] = self._extract_temporal_features(user_id, user_group)
+                        temporal_features[user_id] = self._extract_temporal_features(user_id, user_group, temporal_dims)
                     else:
-                        temporal_features[user_id] = np.zeros(9)
+                        temporal_features[user_id] = np.zeros(temporal_dims)
 
                     combined_features[user_id] = np.concatenate([
                         semantic_embeddings[user_id],
@@ -184,19 +194,8 @@ class UnifiedFeatureExtractor:
                 print(f"  Progress: {min(i+batch_size, len(user_list))}/{len(user_list)} users processed")
                 gc.collect()
 
-        print(f"Feature extraction complete: {len(valid_users)} users with {135}-dimensional features")
-
-        if temporal_features:
-            temporal_array = np.array([temporal_features[uid] for uid in valid_users])
-            temporal_variance = np.var(temporal_array, axis=0)
-            temporal_mean = np.mean(temporal_array, axis=0)
-            print(f"\nTemporal Feature Statistics:")
-            print(f"  Mean: {temporal_mean}")
-            print(f"  Variance: {temporal_variance}")
-            if np.max(temporal_variance) < 0.001:
-                print(f"  WARNING: Temporal features have near-zero variance! All users may have identical temporal patterns.")
-                print(f"  This will cause ablation studies to show similar results.")
-
+        print(f"Feature extraction complete: {len(valid_users)} users with {semantic_dims + liwc_dims + temporal_dims}-dimensional features")
+        
         return {
             'user_ids': valid_users,
             'semantic_embeddings': semantic_embeddings,
@@ -206,14 +205,14 @@ class UnifiedFeatureExtractor:
             'labels': {uid: user_labels[uid] for uid in valid_users},
             'combined_features': combined_features,
             'feature_dims': {
-                'semantic': 64,
-                'liwc': 62,
-                'temporal': 9,
-                'total': 135
+                'semantic': semantic_dims,
+                'liwc': liwc_dims,
+                'temporal': temporal_dims,
+                'total': semantic_dims + liwc_dims + temporal_dims
             }
         }
 
-    def _load_rmhd_liwc_features(self):
+    def _load_rmhd_liwc_features(self, liwc_dims):
         """Load precomputed LIWC features from RMHD CSV files."""
         csv_files = [
             'depression_2018_features_tfidf_256.csv',
@@ -249,22 +248,50 @@ class UnifiedFeatureExtractor:
                             if author not in all_features:
                                 author_data = df[df['author'] == author]
 
-                                liwc_cols = [col for col in df.columns if col.startswith('liwc_')]
+                                # Define explicit categories to prevent leakage
+                                # Linguistic: Function words, pronouns, grammar
+                                ling_cats = [
+                                    'liwc_1st_pers', 'liwc_2nd_pers', 'liwc_3rd_pers', 'liwc_articles_article', 
+                                    'liwc_auxiliary_verbs', 'liwc_adverbs', 'liwc_conjunctions', 'liwc_fillers', 
+                                    'liwc_future_tense', 'liwc_impersonal_pronouns', 'liwc_inclusive', 'liwc_negations', 
+                                    'liwc_nonfluencies', 'liwc_numbers', 'liwc_past_tense', 'liwc_personal_pronouns', 
+                                    'liwc_prepositions', 'liwc_present_tense', 'liwc_quantifiers', 'liwc_relativity', 
+                                    'liwc_space', 'liwc_time', 'liwc_total_functional', 'liwc_total_pronouns', 
+                                    'liwc_common_verbs'
+                                ]
+                                
+                                # Psychological: Affect, cognition, perception, social, personal concerns
+                                psych_cats = [
+                                    'liwc_achievement', 'liwc_affective_processes', 'liwc_anger', 'liwc_anxiety', 
+                                    'liwc_assent', 'liwc_biological', 'liwc_body', 'liwc_causation', 'liwc_certainty', 
+                                    'liwc_cognitive', 'liwc_death', 'liwc_discrepancy', 'liwc_exclusive', 'liwc_family', 
+                                    'liwc_feel', 'liwc_friends', 'liwc_health', 'liwc_hear', 'liwc_home', 'liwc_humans', 
+                                    'liwc_ingestion', 'liwc_inhibition', 'liwc_insight', 'liwc_leisure', 'liwc_money', 
+                                    'liwc_motion', 'liwc_negative_emotion', 'liwc_perceptual_processes', 'liwc_positive_emotion', 
+                                    'liwc_religion', 'liwc_sadness', 'liwc_see', 'liwc_sexual', 'liwc_social_processes', 
+                                    'liwc_swear_words', 'liwc_tentative', 'liwc_work'
+                                ]
+                                
+                                # Filter available columns
+                                avail_ling = [c for c in ling_cats if c in author_data.columns]
+                                avail_psych = [c for c in psych_cats if c in author_data.columns]
+                                
+                                # Extract and concatenate
+                                ling_vals = author_data[avail_ling].mean().values if avail_ling else np.array([])
+                                psych_vals = author_data[avail_psych].mean().values if avail_psych else np.array([])
+                                
+                                # Combine: Linguistic FIRST, then Psychological
+                                liwc_array = np.concatenate([ling_vals, psych_vals])
+                                
+                                # Pad or truncate if necessary (though we prefer exact)
+                                if len(liwc_array) < liwc_dims:
+                                    liwc_array = np.pad(liwc_array, (0, liwc_dims - len(liwc_array)))
+                                elif len(liwc_array) > liwc_dims:
+                                    # If we have more features than expected, truncate from the end (Psychological)
+                                    # But ideally we should update config. Let's just truncate for now to be safe.
+                                    liwc_array = liwc_array[:liwc_dims]
 
-                                if len(liwc_cols) > 0:
-                                    aggregated = author_data[liwc_cols].mean()
-
-                                    if isinstance(aggregated, pd.Series):
-                                        liwc_array = aggregated.values
-                                    else:
-                                        liwc_array = np.array(aggregated)
-
-                                    if len(liwc_array) < 62:
-                                        liwc_array = np.pad(liwc_array, (0, 62 - len(liwc_array)))
-                                    else:
-                                        liwc_array = liwc_array[:62]
-
-                                    all_features[author] = liwc_array
+                                all_features[author] = liwc_array
 
                     files_loaded += 1
                 except Exception as e:
@@ -274,7 +301,7 @@ class UnifiedFeatureExtractor:
         print(f"  Loaded LIWC features from {files_loaded} files for {len(all_features)} users")
         return all_features
 
-    def _extract_basic_liwc(self, text):
+    def _extract_basic_liwc(self, text, liwc_dims):
         """Fallback basic LIWC approximation when precomputed features unavailable."""
         words = text.lower().split()
         word_count = len(words) if words else 1
@@ -292,18 +319,23 @@ class UnifiedFeatureExtractor:
             sum(1 for w in ['yes', 'ok', 'agree'] if w in words) / word_count,
         ]
 
-        return np.array(basic_features + [0.0] * (62 - len(basic_features)))
+        # Pad with zeros to match the expected dimension
+        if len(basic_features) < liwc_dims:
+            basic_features.extend([0.0] * (liwc_dims - len(basic_features)))
 
-    def _extract_temporal_features(self, user_id, user_group_df):
+        return np.array(basic_features[:liwc_dims])
+
+    def _extract_temporal_features(self, user_id, user_group_df, temporal_dims):
         """
         Extract temporal posting pattern features from user data.
 
         Args:
             user_id: User identifier
             user_group_df: DataFrame with user's posts including time_period column
+            temporal_dims: The number of temporal dimensions to return
 
         Returns:
-            np.array: 9-dimensional temporal feature vector
+            np.array: N-dimensional temporal feature vector
         """
         temporal_features = {}
 
@@ -345,7 +377,7 @@ class UnifiedFeatureExtractor:
             temporal_features['posts_pre_pandemic'],
             temporal_features['posts_2018'],
             temporal_features['posts_2019'],
-            temporal_features['posts_post_pandemic'],
+            # temporal_features['posts_post_pandemic'], # REMOVED to prevent future data leakage relative to diagnosis
             temporal_features['subreddit_count'],
             temporal_features['posting_consistency'],
             temporal_features['posting_volume'],
@@ -353,4 +385,8 @@ class UnifiedFeatureExtractor:
             temporal_features['posting_spread']
         ])
 
-        return feature_array[:9]
+        # Pad or truncate to the desired dimension
+        if len(feature_array) < temporal_dims:
+            feature_array = np.pad(feature_array, (0, temporal_dims - len(feature_array)))
+        
+        return feature_array[:temporal_dims]

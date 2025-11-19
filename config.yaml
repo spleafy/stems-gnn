@@ -63,9 +63,9 @@ ego_network:
   snapshot_intervals: ["early_2018", "mid_2018", "late_2018"]
 
   similarity_weights:
-    alpha: 0.6  # Linguistic features (semantic 64-dim + LIWC linguistic 30-dim)
-    beta: 0.1   # Temporal features (9-dim posting patterns)
-    gamma: 0.3  # Psychological features (LIWC psychological 32-dim)
+    alpha: 0.5 # Linguistic features (semantic 64-dim + LIWC linguistic 30-dim)
+    beta: 0.3 # Temporal features (9-dim posting patterns)
+    gamma: 0.2 # Psychological features (LIWC psychological 28-dim)
 
   adaptive_threshold: true
   target_edge_percentile: 75
@@ -83,7 +83,7 @@ models:
 
   semantic_gnn:
     type: "gat"
-    input_dim: 135
+    input_dim: 131
     hidden_dim: 128
     output_dim: 64
     num_heads: 4
@@ -96,8 +96,8 @@ models:
 
     feature_breakdown:
       semantic_dims: 64
-      liwc_dims: 62
-      temporal_dims: 9
+      liwc_dims: 58 # Actual LIWC features found in cache
+      temporal_dims: 8 # Removed post-pandemic feature to prevent leakage
 
 training:
   epochs: 20

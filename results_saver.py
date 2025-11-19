@@ -271,8 +271,17 @@ class ResultsSaver:
         x = np.arange(len(metrics_list))
         width = 0.35
 
-        bars1 = ax.bar(x - width/2, roberta_values, width, label='RoBERTa Baseline', alpha=0.8)
-        bars2 = ax.bar(x + width/2, gnn_values, width, label='Semantic Ego-GNN', alpha=0.8)
+        if roberta_values:
+            bars1 = ax.bar(x - width/2, roberta_values, width, label='RoBERTa Baseline', alpha=0.8)
+            for bar in bars1:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height, f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+
+        if gnn_values:
+            bars2 = ax.bar(x + width/2, gnn_values, width, label='Semantic Ego-GNN', alpha=0.8)
+            for bar in bars2:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height, f'{height:.3f}', ha='center', va='bottom', fontsize=9)
 
         ax.set_xlabel('Metrics', fontsize=12, fontweight='bold')
         ax.set_ylabel('Score', fontsize=12, fontweight='bold')
@@ -282,13 +291,6 @@ class ResultsSaver:
         ax.legend(fontsize=10)
         ax.grid(axis='y', alpha=0.3)
         ax.set_ylim([0, 1.0])
-
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height,
-                       f'{height:.3f}',
-                       ha='center', va='bottom', fontsize=9)
 
         plt.tight_layout()
         output_path = self.results_dir / filename

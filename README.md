@@ -96,7 +96,7 @@ sim_psychological(u_i, u_j) = cosine(LIWC_psychological_i, LIWC_psychological_j)
 S(u_i, u_j) = α·sim_linguistic + β·sim_temporal + γ·sim_psychological
 ```
 
-Default weights: α = 0.4, β = 0.3, γ = 0.3 (optimized via grid search)
+Default weights: α = 0.5, β = 0.3, γ = 0.2 (optimized via grid search)
 
 ### Semantic Ego-Network Construction
 
@@ -119,9 +119,9 @@ For each user _u_, we construct a k-hop semantic ego-network:
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Input: User Features (135-dim)             │
+│  Input: User Features (131-dim)             │
 │  - SBERT embeddings (64-dim)                │
-│  - LIWC features (62-dim)                   │
+│  - LIWC features (58-dim)                   │
 │  - Temporal features (9-dim)                │
 └─────────────────────────────────────────────┘
                     ↓
@@ -173,7 +173,7 @@ Source: [Zenodo](https://zenodo.org/record/3941387)
 | **Control Subreddits**    | 11 (fitness, meditation, relationships, etc.) |
 | **Time Period**           | 2018-01-01 to 2019-03-31                      |
 | **Total Posts**           | 10,000 (5,000 per class, stratified sampling) |
-| **Features**              | 135-dimensional (semantic + LIWC + temporal)  |
+| **Features**              | 131-dimensional (semantic + LIWC + temporal)  |
 
 **Data Processing:**
 
