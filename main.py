@@ -387,11 +387,25 @@ def run_comprehensive_comparison(seed=42):
 
 def run_multi_seed_evaluation(num_seeds=5):
     """
-    Run the evaluation across multiple random seeds and report aggregated metrics.
+    Run the evaluation across multiple random seeds and generate aggregated results.
+
+    This function:
+    1. Runs comprehensive comparison for each seed (training both models + ablation)
+    2. Prints aggregated statistics to console
+    3. Automatically generates aggregated visualizations and saves to results/
+    4. Creates publication-quality figures and JSON summary
+
+    Args:
+        num_seeds (int): Number of seeds to evaluate (default: 5)
+
+    Outputs:
+        - results_seed_XX/ directories for each seed
+        - results/ directory with aggregated visualizations
+        - Console summary of mean ± std metrics
     """
     seeds = [42 + i for i in range(num_seeds)]
     all_results = []
-    
+
     print(f"\n{'='*80}")
     print(f"MULTI-SEED ROBUSTNESS EVALUATION")
     print(f"{'='*80}")
@@ -399,7 +413,7 @@ def run_multi_seed_evaluation(num_seeds=5):
     print(f"Seeds: {seeds}")
     print(f"Objective: Validate model stability and statistical significance of results.")
     print(f"{'-'*80}")
-    
+
     for seed in seeds:
         print(f"\n>>> Running Seed {seed}...")
         try:
@@ -409,7 +423,7 @@ def run_multi_seed_evaluation(num_seeds=5):
             print(f"Error running seed {seed}: {e}")
             import traceback
             traceback.print_exc()
-            
+
     if not all_results:
         print("All runs failed.")
         return
@@ -452,10 +466,63 @@ def run_multi_seed_evaluation(num_seeds=5):
                     print(f"{metric.capitalize():<15}: {mean_val:.4f} ± {std_val:.4f} (CI: {mean_val-1.96*std_val:.4f} - {mean_val+1.96*std_val:.4f})")
             except (KeyError, TypeError) as e:
                 print(f"{metric.capitalize():<15}: N/A (error: {e})")
-            
+
     print(f"\n{'='*80}")
     print("Evaluation Complete.")
     print(f"{'='*80}")
+
+    # Generate aggregated results and visualizations
+    print(f"\n{'='*80}")
+    print("GENERATING AGGREGATED RESULTS AND VISUALIZATIONS")
+    print(f"{'='*80}\n")
+
+    try:
+        from aggregate_results import (
+            load_seed_results,
+            aggregate_metrics,
+            save_aggregated_results,
+            plot_model_comparison,
+            plot_ablation_study,
+            plot_metrics_heatmap,
+            plot_error_comparison
+        )
+
+        # Load results from disk
+        all_results_loaded, all_ablations, result_seeds = load_seed_results()
+
+        if all_results_loaded:
+            # Aggregate metrics
+            aggregated = aggregate_metrics(all_results_loaded)
+
+            # Save aggregated results
+            output_dir = "results"
+            save_aggregated_results(aggregated, result_seeds, output_dir=output_dir)
+
+            # Generate visualizations
+            print(f"\nGenerating publication-quality visualizations...")
+            plot_model_comparison(aggregated, output_dir=output_dir)
+            plot_metrics_heatmap(aggregated, output_dir=output_dir)
+            plot_error_comparison(aggregated, output_dir=output_dir)
+            plot_ablation_study(all_ablations, output_dir=output_dir)
+
+            print(f"\n{'='*80}")
+            print("AGGREGATED RESULTS COMPLETE")
+            print(f"{'='*80}")
+            print(f"\nAll aggregated results saved to: {output_dir}/")
+            print("\nGenerated files:")
+            print("  - multi_seed_aggregated.json")
+            print("  - aggregated_model_comparison.png")
+            print("  - aggregated_metrics_heatmap.png")
+            print("  - aggregated_error_distribution.png")
+            print("  - aggregated_ablation_study.png")
+            print("  - aggregated_summary.txt")
+        else:
+            print("No results found for aggregation.")
+
+    except Exception as e:
+        print(f"Error generating aggregated results: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def main_with_results():
