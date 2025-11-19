@@ -41,10 +41,8 @@ class ResultsSaver:
         self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create run ID if not provided
         self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Create subdirectories
         self.checkpoints_dir = self.results_dir / "checkpoints"
         self.checkpoints_dir.mkdir(exist_ok=True)
 
@@ -74,7 +72,6 @@ class ResultsSaver:
         """
         print(f"\nSaving comprehensive results to {filename}...")
 
-        # Build comprehensive results dictionary
         results = {
             "metadata": {
                 "run_id": self.run_id,
@@ -83,11 +80,9 @@ class ResultsSaver:
             }
         }
 
-        # Add dataset characteristics
         if dataset_info:
             results["dataset_characteristics"] = dataset_info
 
-        # Extract model performance
         model_performance = {}
 
         if roberta_results and 'memory_efficient_transformer' in roberta_results:
@@ -112,17 +107,14 @@ class ResultsSaver:
 
         results['model_performance'] = model_performance
 
-        # Add detailed model configurations
         results['model_configurations'] = {
             'roberta_baseline': roberta_results.get('memory_efficient_transformer', {}),
             'semantic_ego_gnn': gnn_results.get('correct_semantic_gnn', {})
         }
 
-        # Add ablation results if available
         if ablation_results:
             results['ablation_study'] = ablation_results
 
-        # Save to JSON
         output_path = self.results_dir / filename
         with open(output_path, 'w') as f:
             json.dump(results, f, indent=2, default=self._json_serializer)
@@ -147,7 +139,6 @@ class ResultsSaver:
 
         data = []
 
-        # RoBERTa Baseline
         if roberta_results and 'memory_efficient_transformer' in roberta_results:
             rb_metrics = roberta_results['memory_efficient_transformer']['metrics']
             data.append({
@@ -159,7 +150,6 @@ class ResultsSaver:
                 'auc': rb_metrics.get('auc', 0.0)
             })
 
-        # Semantic Ego-GNN
         if gnn_results and 'correct_semantic_gnn' in gnn_results:
             gnn_metrics = gnn_results['correct_semantic_gnn']['metrics']
             data.append({
@@ -264,7 +254,6 @@ class ResultsSaver:
         """
         print(f"\nGenerating performance comparison visualization...")
 
-        # Extract metrics
         metrics_list = ['accuracy', 'precision', 'recall', 'f1', 'auc']
         roberta_values = []
         gnn_values = []
@@ -277,7 +266,6 @@ class ResultsSaver:
             gnn_metrics = gnn_results['correct_semantic_gnn']['metrics']
             gnn_values = [gnn_metrics.get(m, 0.0) for m in metrics_list]
 
-        # Create plot
         fig, ax = plt.subplots(figsize=(10, 6))
 
         x = np.arange(len(metrics_list))
@@ -295,7 +283,6 @@ class ResultsSaver:
         ax.grid(axis='y', alpha=0.3)
         ax.set_ylim([0, 1.0])
 
-        # Add value labels on bars
         for bars in [bars1, bars2]:
             for bar in bars:
                 height = bar.get_height()
@@ -327,7 +314,6 @@ class ResultsSaver:
         configs = list(ablation_results.keys())
         metrics_list = ['accuracy', 'precision', 'recall', 'f1', 'auc']
 
-        # Prepare data
         data = []
         for config in configs:
             for metric in metrics_list:
@@ -339,7 +325,6 @@ class ResultsSaver:
 
         df = pd.DataFrame(data)
 
-        # Create plot
         fig, ax = plt.subplots(figsize=(12, 6))
 
         sns.barplot(data=df, x='Metric', y='Score', hue='Configuration', ax=ax)
@@ -383,7 +368,6 @@ class ResultsSaver:
 
                 ax.plot(fpr, tpr, lw=2, label=f'{model_name} (AUC = {roc_auc:.3f})')
 
-        # Plot diagonal line
         ax.plot([0, 1], [0, 1], 'k--', lw=2, label='Random Classifier')
 
         ax.set_xlabel('False Positive Rate', fontsize=12, fontweight='bold')
@@ -424,7 +408,6 @@ class ResultsSaver:
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-        # Execution time
         bars1 = ax1.bar(models, exec_times, alpha=0.8, color='skyblue')
         ax1.set_ylabel('Time (seconds)', fontsize=12, fontweight='bold')
         ax1.set_title('Execution Time Comparison', fontsize=13, fontweight='bold')
@@ -436,7 +419,6 @@ class ResultsSaver:
             ax1.text(bar.get_x() + bar.get_width()/2., height,
                     f'{height:.1f}s', ha='center', va='bottom', fontsize=9)
 
-        # Memory usage
         bars2 = ax2.bar(models, memory_usage, alpha=0.8, color='lightcoral')
         ax2.set_ylabel('Memory (MB)', fontsize=12, fontweight='bold')
         ax2.set_title('Peak Memory Usage', fontsize=13, fontweight='bold')
@@ -532,12 +514,10 @@ class ResultsSaver:
         print("SAVING ALL RESULTS")
         print("="*60)
 
-        # Save comprehensive JSON
         self.save_comprehensive_results(
             roberta_results, gnn_results, ablation_results, dataset_info
         )
 
-        # Save CSV summaries
         self.save_performance_comparison_csv(roberta_results, gnn_results)
 
         if dataset_info:
@@ -549,7 +529,6 @@ class ResultsSaver:
         if performance_metrics:
             self.save_performance_metrics_csv(performance_metrics)
 
-        # Generate visualizations
         self.plot_model_comparison(roberta_results, gnn_results)
 
         if ablation_results:

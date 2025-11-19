@@ -89,7 +89,7 @@ def run_model_comparison():
         print("Error: Training failed for one or both models")
 
 
-def run_ablation_study(user_posts, user_labels, config, cached_features=None):
+def run_ablation_study(user_posts, user_labels, config, cached_features=None, data_splits=None):
     """
     Execute ablation study to validate individual similarity components.
 
@@ -111,7 +111,7 @@ def run_ablation_study(user_posts, user_labels, config, cached_features=None):
         'linguistic_only': (1.0, 0.0, 0.0),
         'temporal_only': (0.0, 1.0, 0.0),
         'psychological_only': (0.0, 0.0, 1.0),
-        'full_combined': (0.4, 0.3, 0.3)
+        'full_combined': (0.6, 0.1, 0.3)
     }
 
     ablation_results = {}
@@ -125,7 +125,8 @@ def run_ablation_study(user_posts, user_labels, config, cached_features=None):
                 user_posts, user_labels, config,
                 similarity_weights=weights,
                 return_predictions=True,
-                cached_features=cached_features
+                cached_features=cached_features,
+                data_splits=data_splits
             )
 
             if 'correct_semantic_gnn' in result:
@@ -144,7 +145,7 @@ def run_ablation_study(user_posts, user_labels, config, cached_features=None):
     return ablation_results, ablation_predictions
 
 
-def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=None, save_models=False):
+def run_comprehensive_comparison(user_posts, user_labels, config, raw_data=None, results_saver=None, save_models=False):
     """
     Execute comprehensive comparison with baseline, proposed method, and ablation studies.
 
@@ -154,6 +155,7 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
         user_posts: Dictionary mapping user IDs to post lists
         user_labels: Dictionary mapping user IDs to binary labels
         config: Configuration dictionary from config.yaml
+        raw_data: Raw data dictionary containing combined_df for temporal features
         results_saver: Optional ResultsSaver instance for checkpoint persistence
         save_models: If True, saves model checkpoints
 
@@ -172,7 +174,6 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
 
     process = psutil.Process(os.getpid())
 
-    # Extract features ONCE for all models
     print("\n" + "="*60)
     print("Extracting Features (shared across all models)")
     print("="*60)
@@ -180,15 +181,56 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
     feature_extractor = UnifiedFeatureExtractor(config)
     start_feature_extraction = time.time()
 
+    combined_df = raw_data.get('combined_df', None)
+
+    max_users_config = config.get('data', {}).get('max_users', 10000)
     cached_features = feature_extractor.extract_all_features(
-        user_posts, user_labels, max_users=config.get('semantic_ego_gnn', {}).get('max_users', 150)
+        user_posts, user_labels, combined_df=combined_df,
+        max_users=max_users_config
     )
 
     end_feature_extraction = time.time()
     print(f"\nFeature extraction complete in {end_feature_extraction - start_feature_extraction:.1f} seconds")
     print(f"Features will be reused for baseline, STEMS-GNN, and all ablation studies\n")
 
-    # Training models using cached features
+    print("\n" + "="*60)
+    print("Creating Shared Train/Val/Test Splits")
+    print("="*60)
+
+    from sklearn.model_selection import train_test_split
+
+    all_user_ids = cached_features['user_ids']
+    all_labels = [cached_features['labels'][uid] for uid in all_user_ids]
+
+    test_size = config.get('data', {}).get('test_size', 0.2)
+    val_size = config.get('data', {}).get('val_size', 0.2)
+
+    train_val_ids, test_ids = train_test_split(
+        all_user_ids,
+        test_size=test_size,
+        random_state=42,
+        stratify=all_labels
+    )
+
+    train_val_labels = [cached_features['labels'][uid] for uid in train_val_ids]
+    train_ids, val_ids = train_test_split(
+        train_val_ids,
+        test_size=val_size,
+        random_state=42,
+        stratify=train_val_labels
+    )
+
+    print(f"Data splits created:")
+    print(f"  Train: {len(train_ids)} users ({len(train_ids)/len(all_user_ids)*100:.1f}%)")
+    print(f"  Val:   {len(val_ids)} users ({len(val_ids)/len(all_user_ids)*100:.1f}%)")
+    print(f"  Test:  {len(test_ids)} users ({len(test_ids)/len(all_user_ids)*100:.1f}%)")
+
+    data_splits = {
+        'train_ids': train_ids,
+        'val_ids': val_ids,
+        'test_ids': test_ids
+    }
+
     print("\nTraining RoBERTa Baseline...")
     mem_before_rb = process.memory_info().rss / 1024 / 1024
     start_time_rb = time.time()
@@ -196,7 +238,8 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
     roberta_result, roberta_predictions = train_memory_efficient_baseline(
         user_posts, user_labels, config, return_predictions=True,
         save_model=save_models, results_saver=results_saver,
-        cached_features=cached_features
+        cached_features=cached_features,
+        data_splits=data_splits
     )
 
     end_time_rb = time.time()
@@ -213,7 +256,8 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
     gnn_result, gnn_predictions = train_correct_semantic_gnn(
         user_posts, user_labels, config, return_predictions=True,
         save_model=save_models, results_saver=results_saver,
-        cached_features=cached_features
+        cached_features=cached_features,
+        data_splits=data_splits
     )
 
     end_time_gnn = time.time()
@@ -224,7 +268,8 @@ def run_comprehensive_comparison(user_posts, user_labels, config, results_saver=
     performance_metrics['peak_memory_mb']['Semantic Ego-GNN'] = mem_after_gnn
 
     ablation_results, ablation_predictions = run_ablation_study(
-        user_posts, user_labels, config, cached_features=cached_features
+        user_posts, user_labels, config, cached_features=cached_features,
+        data_splits=data_splits
     )
 
     all_results = {
@@ -286,7 +331,7 @@ def main_with_results():
     }
 
     all_results, all_predictions, performance_metrics = run_comprehensive_comparison(
-        user_posts, user_labels, config, results_saver=saver, save_models=True
+        user_posts, user_labels, config, raw_data=raw_data, results_saver=saver, save_models=True
     )
 
     roberta_result = all_results.get('roberta_baseline', {})
