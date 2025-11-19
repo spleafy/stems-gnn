@@ -248,8 +248,6 @@ class UnifiedFeatureExtractor:
                             if author not in all_features:
                                 author_data = df[df['author'] == author]
 
-                                # Define explicit categories to prevent leakage
-                                # Linguistic: Function words, pronouns, grammar
                                 ling_cats = [
                                     'liwc_1st_pers', 'liwc_2nd_pers', 'liwc_3rd_pers', 'liwc_articles_article', 
                                     'liwc_auxiliary_verbs', 'liwc_adverbs', 'liwc_conjunctions', 'liwc_fillers', 
@@ -260,7 +258,6 @@ class UnifiedFeatureExtractor:
                                     'liwc_common_verbs'
                                 ]
                                 
-                                # Psychological: Affect, cognition, perception, social, personal concerns
                                 psych_cats = [
                                     'liwc_achievement', 'liwc_affective_processes', 'liwc_anger', 'liwc_anxiety', 
                                     'liwc_assent', 'liwc_biological', 'liwc_body', 'liwc_causation', 'liwc_certainty', 
@@ -272,23 +269,17 @@ class UnifiedFeatureExtractor:
                                     'liwc_swear_words', 'liwc_tentative', 'liwc_work'
                                 ]
                                 
-                                # Filter available columns
                                 avail_ling = [c for c in ling_cats if c in author_data.columns]
                                 avail_psych = [c for c in psych_cats if c in author_data.columns]
                                 
-                                # Extract and concatenate
                                 ling_vals = author_data[avail_ling].mean().values if avail_ling else np.array([])
                                 psych_vals = author_data[avail_psych].mean().values if avail_psych else np.array([])
                                 
-                                # Combine: Linguistic FIRST, then Psychological
                                 liwc_array = np.concatenate([ling_vals, psych_vals])
                                 
-                                # Pad or truncate if necessary (though we prefer exact)
                                 if len(liwc_array) < liwc_dims:
                                     liwc_array = np.pad(liwc_array, (0, liwc_dims - len(liwc_array)))
                                 elif len(liwc_array) > liwc_dims:
-                                    # If we have more features than expected, truncate from the end (Psychological)
-                                    # But ideally we should update config. Let's just truncate for now to be safe.
                                     liwc_array = liwc_array[:liwc_dims]
 
                                 all_features[author] = liwc_array
@@ -319,7 +310,6 @@ class UnifiedFeatureExtractor:
             sum(1 for w in ['yes', 'ok', 'agree'] if w in words) / word_count,
         ]
 
-        # Pad with zeros to match the expected dimension
         if len(basic_features) < liwc_dims:
             basic_features.extend([0.0] * (liwc_dims - len(basic_features)))
 
@@ -377,7 +367,6 @@ class UnifiedFeatureExtractor:
             temporal_features['posts_pre_pandemic'],
             temporal_features['posts_2018'],
             temporal_features['posts_2019'],
-            # temporal_features['posts_post_pandemic'], # REMOVED to prevent future data leakage relative to diagnosis
             temporal_features['subreddit_count'],
             temporal_features['posting_consistency'],
             temporal_features['posting_volume'],
@@ -385,7 +374,6 @@ class UnifiedFeatureExtractor:
             temporal_features['posting_spread']
         ])
 
-        # Pad or truncate to the desired dimension
         if len(feature_array) < temporal_dims:
             feature_array = np.pad(feature_array, (0, temporal_dims - len(feature_array)))
         

@@ -97,18 +97,9 @@ def run_model_comparison():
         else:
             print("\nResults demonstrate comparable performance between approaches")
             
-        # --- Statistical Significance ---
         print("\n" + "=" * 60)
         print("Statistical Significance Analysis")
-        print("=" * 60)
-        
-        # We need the predictions to run McNemar's test
-        # Note: The current implementation of run_model_comparison doesn't return predictions directly,
-        # but run_comprehensive_comparison does. 
-        # Ideally, we should use run_comprehensive_comparison or modify train_* to return predictions here too.
-        # For now, let's assume we are running this as part of the comprehensive pipeline or modify this function later.
-        # However, since we are editing main.py, let's look at run_comprehensive_comparison which is the main entry point for results.
-        
+        print("=" * 60)        
     else:
         print("Error: Training failed for one or both models")
 
@@ -137,7 +128,6 @@ def run_ablation_study(user_posts, user_labels, config, cached_features=None, da
         'psychological_only': (0.0, 0.0, 1.0),
     }
 
-    # Add the 'full_combined' run with weights from the main config
     similarity_weights_config = config.get('ego_network', {}).get('similarity_weights', {})
     full_combined_weights = (
         similarity_weights_config.get('alpha', 0.6),
@@ -191,11 +181,10 @@ def run_comprehensive_comparison(seed=42):
     print(f"Objective: Comparative evaluation of STEMS-GNN vs. RoBERTa Baseline")
     print(f"{'-'*80}")
     
-    # Load configuration
     config = load_config('config.yaml')
     set_seed(seed)
 
-    saver = ResultsSaver(results_dir=f'results_seed_{seed}') # Use seed in results dir for multi-seed runs
+    saver = ResultsSaver(results_dir=f'results_seed_{seed}')
 
     performance_metrics = {
         'execution_time_sec': {},
@@ -245,9 +234,8 @@ def run_comprehensive_comparison(seed=42):
     all_user_ids = cached_features['user_ids']
     all_labels = [cached_features['labels'][uid] for uid in all_user_ids]
 
-    # Updated splitting logic as per diff
     train_ids, test_ids = train_test_split(all_user_ids, test_size=0.2, random_state=seed, stratify=all_labels)
-    train_ids, val_ids = train_test_split(train_ids, test_size=0.125, random_state=seed, stratify=[cached_features['labels'][uid] for uid in train_ids]) # 0.125 * 0.8 = 0.1 of total
+    train_ids, val_ids = train_test_split(train_ids, test_size=0.125, random_state=seed, stratify=[cached_features['labels'][uid] for uid in train_ids])
 
     print(f"Data splits created:")
     print(f"  Train: {len(train_ids)} users ({len(train_ids)/len(all_user_ids)*100:.1f}%)")
@@ -260,13 +248,25 @@ def run_comprehensive_comparison(seed=42):
         'test_ids': test_ids
     }
 
+    depression_users = sum(1 for uid in all_user_ids if cached_features['labels'][uid] == 1)
+    control_users = len(all_user_ids) - depression_users
+    total_posts = sum(len(user_posts[uid]) for uid in all_user_ids)
+
+    dataset_info = {
+        'total_users': len(all_user_ids),
+        'depression_users': depression_users,
+        'control_users': control_users,
+        'class_ratio': depression_users / len(all_user_ids) if len(all_user_ids) > 0 else 0,
+        'avg_posts_per_user': total_posts / len(all_user_ids) if len(all_user_ids) > 0 else 0
+    }
+
     print("\nTraining RoBERTa Baseline...")
     mem_before_rb = process.memory_info().rss / 1024 / 1024
     start_time_rb = time.time()
 
     roberta_result, roberta_predictions = train_memory_efficient_baseline(
         user_posts, user_labels, config, return_predictions=True,
-        save_model=True, results_saver=saver, # save_models is now hardcoded to True
+        save_model=True, results_saver=saver,
         cached_features=cached_features,
         data_splits=data_splits
     )
@@ -290,7 +290,7 @@ def run_comprehensive_comparison(seed=42):
     )
     gnn_result, gnn_predictions = train_correct_semantic_gnn(
         user_posts, user_labels, config, return_predictions=True,
-        save_model=True, results_saver=saver, # save_models is now hardcoded to True
+        save_model=True, results_saver=saver,
         cached_features=cached_features,
         data_splits=data_splits,
         similarity_weights=similarity_weights
@@ -320,9 +320,6 @@ def run_comprehensive_comparison(seed=42):
         'ablation_study': ablation_predictions
     }
 
-
-
-
     predictions_dict = {}
     if 'roberta_baseline' in all_predictions:
         predictions_dict['RoBERTa Baseline'] = all_predictions['roberta_baseline']
@@ -342,7 +339,6 @@ def run_comprehensive_comparison(seed=42):
         performance_metrics=performance_metrics
     )
 
-    # --- Research Quality Enhancements ---
     print("\n" + "="*60)
     print("Generating Research-Grade Evaluation Artifacts")
     print("="*60)
@@ -350,17 +346,10 @@ def run_comprehensive_comparison(seed=42):
     if 'roberta_baseline' in all_predictions and 'semantic_gnn_full' in all_predictions:
         y_true_rob, y_pred_rob_prob = all_predictions['roberta_baseline']
         y_true_gnn, y_pred_gnn_prob = all_predictions['semantic_gnn_full']
-        
-        # Convert probs to binary preds (assuming 0.5 threshold for simplicity, though models might use argmax)
-        # Actually, the train_* functions return (true_labels, probabilities) or (true_labels, predictions) depending on implementation.
-        # Let's check: train_memory_efficient_baseline returns (transformer_test_labels, transformer_probs)
-        # train_correct_semantic_gnn returns (true_labels, probabilities)
-        
-        # We need binary predictions for McNemar's
+                
         y_pred_rob = [1 if p > 0.5 else 0 for p in y_pred_rob_prob]
         y_pred_gnn = [1 if p > 0.5 else 0 for p in y_pred_gnn_prob]
         
-        # Ensure labels match (they should if using shared splits)
         if len(y_true_rob) == len(y_true_gnn):
              chi2, p_value = mcnemar_test(y_true_gnn, y_pred_rob, y_pred_gnn)
              print(f"\nMcNemar's Test (STEMS-GNN vs RoBERTa):")
@@ -371,7 +360,6 @@ def run_comprehensive_comparison(seed=42):
              else:
                  print("  RESULT: No statistically significant difference")
                  
-             # Bootstrap CI for F1
              print("\nBootstrap Confidence Intervals (95%):")
              low_r, high_r = bootstrap_confidence_interval(y_true_rob, y_pred_rob, f1_score)
              print(f"  RoBERTa F1: {f1_score(y_true_rob, y_pred_rob):.4f} ({low_r:.4f}, {high_r:.4f})")
@@ -379,18 +367,10 @@ def run_comprehensive_comparison(seed=42):
              low_g, high_g = bootstrap_confidence_interval(y_true_gnn, y_pred_gnn, f1_score)
              print(f"  STEMS-GNN F1: {f1_score(y_true_gnn, y_pred_gnn):.4f} ({low_g:.4f}, {high_g:.4f})")
              
-             # Confusion Matrices
              plot_confusion_matrix(y_true_gnn, y_pred_gnn, save_path=os.path.join(saver.results_dir, 'cm_stems_gnn.png'))
              plot_confusion_matrix(y_true_rob, y_pred_rob, save_path=os.path.join(saver.results_dir, 'cm_roberta.png'))
              print(f"\nConfusion matrices saved to {saver.results_dir}")
              
-             # Error Analysis
-             # We need user IDs for this. The predictions tuple doesn't have them.
-             # We can try to retrieve them from cached_features if we had the test_ids.
-             # For now, we'll skip the user_id mapping in the generic function or pass a dummy list if needed.
-             # But wait, run_comprehensive_comparison returns data_splits implicitly used inside.
-             # We don't have easy access to test_ids here without refactoring.
-             # We will skip saving specific user IDs for now but save the indices.
              analyze_misclassifications(y_true_gnn, y_pred_gnn, range(len(y_true_gnn)), {}, save_path=os.path.join(saver.results_dir, 'misclassified_gnn.csv'))
              print(f"Misclassified examples saved to {saver.results_dir}/misclassified_gnn.csv")
              
@@ -434,26 +414,44 @@ def run_multi_seed_evaluation(num_seeds=5):
         print("All runs failed.")
         return
 
-    # Aggregate Metrics
     metrics_to_agg = ['accuracy', 'precision', 'recall', 'f1', 'auc']
-    models = ['roberta_baseline', 'correct_semantic_gnn']
-    
+
+    available_models = {}
+    if all_results:
+        first_result = all_results[0]
+        for key in ['roberta_baseline', 'memory_efficient_transformer', 'tfidf_logistic']:
+            if key in first_result:
+                available_models['RoBERTa Baseline'] = key
+                break
+        for key in ['semantic_gnn_full', 'correct_semantic_gnn', 'semantic_ego_gnn']:
+            if key in first_result:
+                available_models['STEMS-GNN'] = key
+                break
+
     print(f"\n{'='*80}")
     print(f"Multi-Seed Evaluation Results ({len(all_results)} runs)")
     print(f"{'='*80}")
-    
-    for model_name in models:
-        if model_name not in all_results[0]:
-            continue
-            
-        print(f"\nModel: {model_name}")
+
+    for display_name, model_key in available_models.items():
+        print(f"\nModel: {display_name}")
         print("-" * 40)
-        
+
         for metric in metrics_to_agg:
-            values = [r[model_name]['metrics'][metric] for r in all_results if model_name in r]
-            mean_val = np.mean(values)
-            std_val = np.std(values)
-            print(f"{metric.capitalize():<15}: {mean_val:.4f} ± {std_val:.4f} (CI: {mean_val-1.96*std_val:.4f} - {mean_val+1.96*std_val:.4f})")
+            try:
+                values = []
+                for r in all_results:
+                    if model_key in r:
+                        if 'metrics' in r[model_key]:
+                            values.append(r[model_key]['metrics'][metric])
+                        elif metric in r[model_key]:
+                            values.append(r[model_key][metric])
+
+                if values:
+                    mean_val = np.mean(values)
+                    std_val = np.std(values)
+                    print(f"{metric.capitalize():<15}: {mean_val:.4f} ± {std_val:.4f} (CI: {mean_val-1.96*std_val:.4f} - {mean_val+1.96*std_val:.4f})")
+            except (KeyError, TypeError) as e:
+                print(f"{metric.capitalize():<15}: N/A (error: {e})")
             
     print(f"\n{'='*80}")
     print("Evaluation Complete.")
@@ -464,7 +462,6 @@ def main_with_results():
     """
     Main execution function that saves results.
     """
-    # Run multi-seed evaluation
     run_multi_seed_evaluation(num_seeds=5)
 
 

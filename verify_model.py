@@ -24,7 +24,6 @@ def verify():
     print(f"Model Input Dim: {model.input_dim}")
     print(f"Model Temporal Dim: {model.temporal_dim}")
     
-    # Test forward pass with dummy data
     from torch_geometric.data import Data
     x = torch.randn(10, input_dim)
     edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)

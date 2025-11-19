@@ -18,14 +18,12 @@ def analyze_features(cache_path="data/processed/features_cache_b4a06071e1d4697c3
     user_ids = cached_features["user_ids"]
     feature_dims = cached_features["feature_dims"]
 
-    # --- Scaling ---
     print("\n--- Scaling ---")
     from sklearn.preprocessing import RobustScaler
     scaler = RobustScaler()
     scaled_features = scaler.fit_transform(np.array([combined_features[uid] for uid in user_ids]))
     print("Features scaled using RobustScaler.")
 
-    # Separate the features into groups
     semantic_features = scaled_features[:, :feature_dims["semantic"]]
     liwc_features = scaled_features[:, feature_dims["semantic"]:feature_dims["semantic"] + feature_dims["liwc"]]
     temporal_features = scaled_features[:, -feature_dims["temporal"]:]
@@ -46,23 +44,19 @@ def analyze_features(cache_path="data/processed/features_cache_b4a06071e1d4697c3
     print(f"  LIWC:      {np.var(liwc_features):.4f}")
     print(f"  Temporal:  {np.var(temporal_features):.4f}")
 
-    # --- LIWC Variance Analysis ---
     print("\n--- LIWC Variance Analysis ---")
     liwc_variances = np.var(liwc_features, axis=0)
     top_10_liwc_variances = np.argsort(liwc_variances)[-10:]
     
     print("\nTop 10 LIWC features with the highest variance:")
-    # We don't have the names of the LIWC features, so we'll just use their indices
     for i in reversed(top_10_liwc_variances):
         print(f"  LIWC feature {i}: {liwc_variances[i]:.4f}")
 
-    # --- Correlation Analysis ---
     print("\n--- Correlation Analysis ---")
     df_semantic = pd.DataFrame(semantic_features)
     df_liwc = pd.DataFrame(liwc_features)
     df_temporal = pd.DataFrame(temporal_features)
 
-    # To simplify, let's take the mean of each feature set for each user
     mean_semantic = df_semantic.mean(axis=1)
     mean_liwc = df_liwc.mean(axis=1)
     mean_temporal = df_temporal.mean(axis=1)
@@ -76,13 +70,11 @@ def analyze_features(cache_path="data/processed/features_cache_b4a06071e1d4697c3
     print("\nCorrelation matrix of the mean of each feature group:")
     print(correlation_df.corr())
 
-    # --- Similarity Analysis ---
     print("\n--- Similarity Analysis ---")
     linguistic_sim = cosine_similarity(np.concatenate([semantic_features, liwc_features[:, :30]], axis=1))
     temporal_sim = cosine_similarity(temporal_features)
     psychological_sim = cosine_similarity(liwc_features[:, 30:])
     
-    # Get off-diagonal elements
     linguistic_sim_off_diag = linguistic_sim[~np.eye(linguistic_sim.shape[0], dtype=bool)]
     temporal_sim_off_diag = temporal_sim[~np.eye(temporal_sim.shape[0], dtype=bool)]
     psychological_sim_off_diag = psychological_sim[~np.eye(psychological_sim.shape[0], dtype=bool)]

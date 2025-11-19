@@ -1,7 +1,6 @@
 from main import run_multi_seed_evaluation
 import sys
 
-# Mock run_comprehensive_comparison to avoid full training
 import main
 
 def mock_run(seed=42):

@@ -37,13 +37,12 @@ class CorrectSemanticProcessor:
         self.config = config
         self.alpha, self.beta, self.gamma = similarity_weights
         
-        # Get feature dimensions from config
         feature_breakdown = self.config.get('models', {}).get('semantic_gnn', {}).get('feature_breakdown', {})
         self.semantic_dims = feature_breakdown.get('semantic_dims', 64)
         self.liwc_dims = feature_breakdown.get('liwc_dims', 62)
-        self.temporal_dims = feature_breakdown.get('temporal_dims', 8) # Updated to 8 (removed post-pandemic)
+        self.temporal_dims = feature_breakdown.get('temporal_dims', 8)
         
-        self.linguistic_dims = 30 # As specified in the README
+        self.linguistic_dims = 30
         self.psychological_dims = self.liwc_dims - self.linguistic_dims
 
     def calculate_multi_similarity(self, user_features, neighbor_features=None):
@@ -65,23 +64,19 @@ class CorrectSemanticProcessor:
             neighbors = users
             neighbor_matrix = features_matrix
 
-        # Define feature slices based on config
         s_end = self.semantic_dims
         l_end = s_end + self.linguistic_dims
         p_end = s_end + self.liwc_dims
         t_end = p_end + self.temporal_dims
 
-        # Linguistic Similarity (Semantic + LIWC Linguistic)
         sem_plus_ling_user = np.concatenate([features_matrix[:, :s_end], features_matrix[:, s_end:l_end]], axis=1)
         sem_plus_ling_neighbor = np.concatenate([neighbor_matrix[:, :s_end], neighbor_matrix[:, s_end:l_end]], axis=1)
         linguistic_sim = cosine_similarity(sem_plus_ling_user, sem_plus_ling_neighbor)
 
-        # Temporal Similarity
         temporal_user = features_matrix[:, p_end:t_end]
         temporal_neighbor = neighbor_matrix[:, p_end:t_end]
         temporal_sim = cosine_similarity(temporal_user, temporal_neighbor)
 
-        # Psychological Similarity (LIWC Psychological)
         psych_user = features_matrix[:, l_end:p_end]
         psych_neighbor = neighbor_matrix[:, l_end:p_end]
         psychological_sim = cosine_similarity(psych_user, psych_neighbor)
@@ -128,7 +123,6 @@ class CorrectSemanticProcessor:
         neighbor_features_matrix = np.array([neighbor_features[neighbor] for neighbor in neighbors])
 
         if adaptive_threshold:
-            # For adaptive threshold, always use the full training set similarity distribution
             train_sim_matrix, _, _ = self.calculate_multi_similarity(neighbor_features)
             non_diagonal_similarities = train_sim_matrix[np.triu_indices(train_sim_matrix.shape[0], k=1)]
             
@@ -143,7 +137,6 @@ class CorrectSemanticProcessor:
         for i, ego_user in enumerate(users):
             ego_similarities = similarity_matrix[i]
 
-            # Find 1-hop neighbors from the neighbor set
             neighbor_indices = []
             for j, sim in enumerate(ego_similarities):
                 if not is_training_set or (is_training_set and i != j):
@@ -156,24 +149,19 @@ class CorrectSemanticProcessor:
                 neighbor_indices = neighbor_indices[:k_neighbors]
             
             if len(neighbor_indices) < min_neighbors:
-                # Fallback: find the top-k most similar neighbors if threshold is too strict
                 all_neighbors = sorted([(j, sim) for j, sim in enumerate(ego_similarities) if not is_training_set or (is_training_set and i !=j)], key=lambda x:x[1], reverse=True)
                 neighbor_indices = all_neighbors[:min_neighbors]
 
             if len(neighbor_indices) < min_neighbors:
-                continue # Skip user if not enough neighbors are found
+                continue
 
-            # The network includes the ego user and its multi-hop neighbors
             network_nodes = {ego_user: user_features[ego_user]}
             
-            # Add 1-hop neighbors and their features
             hop_1_neighbor_ids = [neighbors[idx] for idx, _ in neighbor_indices]
             for neighbor_id in hop_1_neighbor_ids:
                 network_nodes[neighbor_id] = neighbor_features[neighbor_id]
 
-            # If k_hops >= 2, find neighbors of the 1-hop neighbors (2-hop neighbors)
             if k_hops >= 2:
-                # To do this correctly without leakage, we need a global similarity matrix of the neighbor pool
                 if 'train_sim_matrix' not in locals():
                     train_sim_matrix, _, _ = self.calculate_multi_similarity(neighbor_features)
 
@@ -188,18 +176,15 @@ class CorrectSemanticProcessor:
                             hop_2_candidates.append((hop_2_id, sim))
                     
                     hop_2_candidates.sort(key=lambda x: x[1], reverse=True)
-                    for neighbor_id, _ in hop_2_candidates[:5]: # Limit to 5 new neighbors per 1-hop node
+                    for neighbor_id, _ in hop_2_candidates[:5]:
                         if neighbor_id not in network_nodes:
                             network_nodes[neighbor_id] = neighbor_features[neighbor_id]
             
-            # Map global IDs to local indices in the new graph
             local_node_map = {uid: i for i, uid in enumerate(network_nodes.keys())}
             ego_local_idx = local_node_map[ego_user]
 
-            # Prepare features and edges for PyG Data object
             network_features_matrix = np.array(list(network_nodes.values()))
             
-            # Feature selection for ablation
             feature_indices = []
             s_end = self.semantic_dims
             l_end = s_end + self.linguistic_dims
@@ -212,29 +197,25 @@ class CorrectSemanticProcessor:
             
             if len(feature_indices) > 0:
                 network_features = network_features_matrix[:, feature_indices]
-            else: # Full features if all weights are zero (edge case)
+            else:
                 network_features = network_features_matrix
                 feature_indices = list(range(network_features_matrix.shape[1]))
 
             edge_list = []
             edge_weights = []
 
-            # 1. Add edges from ego to 1-hop neighbors
             for neighbor_id, weight in zip(hop_1_neighbor_ids, [sim for _, sim in neighbor_indices]):
                 if neighbor_id in local_node_map:
                     local_idx = local_node_map[neighbor_id]
                     edge_list.extend([[ego_local_idx, local_idx], [local_idx, ego_local_idx]])
                     edge_weights.extend([weight, weight])
 
-            # 2. Add edges between neighbors (optional)
             if preserve_hop_structure_only:
                 if k_hops >= 2:
-                    # Add edges between 1-hop and 2-hop neighbors
                     for hop_1_id in hop_1_neighbor_ids:
                         if hop_1_id not in local_node_map: continue
                         hop_1_local_idx = local_node_map[hop_1_id]
                         
-                        # Find the 2-hop neighbors of this 1-hop node
                         hop_1_global_idx = neighbors.index(hop_1_id)
                         for j, sim in enumerate(train_sim_matrix[hop_1_global_idx]):
                             hop_2_id = neighbors[j]
@@ -244,14 +225,12 @@ class CorrectSemanticProcessor:
                                     edge_list.extend([[hop_1_local_idx, hop_2_local_idx], [hop_2_local_idx, hop_1_local_idx]])
                                     edge_weights.extend([sim, sim])
             else:
-                # Efficiently add edges between all nodes in the network using the pre-computed similarity matrix
                 node_ids = list(network_nodes.keys())
                 for i1, uid1 in enumerate(node_ids):
                     for i2, uid2 in enumerate(node_ids):
                         if i1 >= i2:
                             continue
 
-                        # Get global indices from the original neighbor list
                         if uid1 not in neighbors or uid2 not in neighbors: continue
                         global_idx1 = neighbors.index(uid1)
                         global_idx2 = neighbors.index(uid2)
@@ -395,7 +374,6 @@ class CorrectSemanticGNN(nn.Module):
 
         x = self.input_proj(x)
         
-        # Reshape edge_attr for GATConv
         edge_attr_reshaped = edge_attr.view(-1, 1) if edge_attr is not None and edge_attr.ndim == 1 else edge_attr
 
         identity1 = x
@@ -416,9 +394,7 @@ class CorrectSemanticGNN(nn.Module):
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.norm3(x + self.residual3(identity3))
 
-        # Use global mean pooling to get a graph-level representation
         if batch is None:
-            # If batch is not provided, create a dummy batch of zeros
             batch = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
             
         graph_features = global_mean_pool(x, batch)
@@ -508,13 +484,13 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
     print(f"Building ego-networks for training set ({len(train_features)} users)...")
     train_ego_networks = processor.build_ego_networks(
         train_features,
-        neighbor_features=None,  # Pass None to indicate it's the training set
+        neighbor_features=None,
         user_labels=user_labels,
         k_neighbors=k_neighbors,
         threshold=threshold,
         k_hops=k_hops,
         min_neighbors=5,
-        adaptive_threshold=True,  # Let build_ego_networks handle the threshold calculation
+        adaptive_threshold=True,
         target_edge_percentile=target_edge_percentile,
         preserve_hop_structure_only=preserve_hop_structure_only
     )
@@ -522,7 +498,6 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
     if len(train_ego_networks) < 15:
         return {'error': 'Insufficient ego-networks in training data'}
 
-    # For validation and test, use the training set as the neighbor pool to prevent data leakage
     print(f"Building ego-networks for validation set ({len(val_features)} users)...")
     val_ego_networks = processor.build_ego_networks(
         val_features,
@@ -532,7 +507,7 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
         threshold=threshold,
         k_hops=k_hops,
         min_neighbors=3,
-        adaptive_threshold=True, # Will use training data distribution
+        adaptive_threshold=True,
         target_edge_percentile=target_edge_percentile,
         preserve_hop_structure_only=preserve_hop_structure_only
     )
@@ -546,7 +521,7 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
         threshold=threshold,
         k_hops=k_hops,
         min_neighbors=3,
-        adaptive_threshold=True, # Will use training data distribution
+        adaptive_threshold=True,
         target_edge_percentile=target_edge_percentile,
         preserve_hop_structure_only=preserve_hop_structure_only
     )
@@ -616,7 +591,6 @@ def train_correct_semantic_gnn(user_posts, user_labels, config, similarity_weigh
         total_loss = 0
         num_batches = 0
 
-    # Create DataLoaders
     train_dataset = [train_ego_networks[u] for u in train_users if u in train_ego_networks]
     val_dataset = [val_ego_networks[u] for u in val_users if u in val_ego_networks]
     test_dataset = [test_ego_networks[u] for u in test_users if u in test_ego_networks]
