@@ -58,16 +58,18 @@ class ResultsSaver:
         gnn_results: Dict[str, Any],
         ablation_results: Optional[Dict[str, Any]] = None,
         dataset_info: Optional[Dict[str, Any]] = None,
+        predictions: Optional[Dict[str, Tuple]] = None,
         filename: str = "comprehensive_results.json"
     ) -> None:
         """
-        Save comprehensive results to JSON file.
+        Save comprehensive results to JSON file including confusion matrices.
 
         Args:
             roberta_results: RoBERTa baseline results dictionary
             gnn_results: Semantic Ego-GNN results dictionary
             ablation_results: Optional ablation study results
             dataset_info: Optional dataset characteristics
+            predictions: Optional dictionary mapping model names to (y_true, y_pred) tuples
             filename: Output filename
         """
         print(f"\nSaving comprehensive results to {filename}...")
@@ -95,6 +97,12 @@ class ResultsSaver:
                 'auc': rb_metrics.get('auc', 0.0)
             }
 
+            if predictions and 'RoBERTa Baseline' in predictions:
+                from sklearn.metrics import confusion_matrix
+                y_true, y_pred = predictions['RoBERTa Baseline']
+                cm = confusion_matrix(y_true, y_pred)
+                model_performance['roberta_baseline']['confusion_matrix'] = cm.tolist()
+
         if gnn_results and 'correct_semantic_gnn' in gnn_results:
             gnn_metrics = gnn_results['correct_semantic_gnn']['metrics']
             model_performance['semantic_ego_gnn'] = {
@@ -104,6 +112,12 @@ class ResultsSaver:
                 'f1': gnn_metrics.get('f1', 0.0),
                 'auc': gnn_metrics.get('auc', 0.0)
             }
+
+            if predictions and 'STEMS-GNN' in predictions:
+                from sklearn.metrics import confusion_matrix
+                y_true, y_pred = predictions['STEMS-GNN']
+                cm = confusion_matrix(y_true, y_pred)
+                model_performance['semantic_ego_gnn']['confusion_matrix'] = cm.tolist()
 
         results['model_performance'] = model_performance
 
@@ -517,7 +531,7 @@ class ResultsSaver:
         print("="*60)
 
         self.save_comprehensive_results(
-            roberta_results, gnn_results, ablation_results, dataset_info
+            roberta_results, gnn_results, ablation_results, dataset_info, predictions
         )
 
         self.save_performance_comparison_csv(roberta_results, gnn_results)

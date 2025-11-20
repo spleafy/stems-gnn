@@ -23,9 +23,10 @@ plt.rcParams['legend.fontsize'] = 9
 
 
 def load_seed_results(results_dir_pattern="results_seed_"):
-    """Load all available seed results from disk including ablation studies."""
+    """Load all available seed results from disk including ablation studies and confusion matrices."""
     all_results = []
     all_ablations = []
+    all_full_data = []
     seeds = []
 
     base_dir = Path(".")
@@ -48,13 +49,15 @@ def load_seed_results(results_dir_pattern="results_seed_"):
                 ablation_study = data.get('ablation_study', {})
                 all_ablations.append(ablation_study)
 
+                all_full_data.append(data)
+
                 print(f"✓ Loaded results from {seed_dir.name} (seed {seed_num})")
             except Exception as e:
                 print(f"✗ Failed to load {seed_dir.name}: {e}")
         else:
             print(f"✗ No comprehensive_results.json in {seed_dir.name}")
 
-    return all_results, all_ablations, seeds
+    return all_results, all_ablations, seeds, all_full_data
 
 
 def aggregate_metrics(all_results):
@@ -198,13 +201,22 @@ def plot_model_comparison(aggregated_results, output_dir="results"):
 
 
 def plot_ablation_study(all_ablations, output_dir="results"):
-    """Create visualization of ablation study results across seeds."""
+    """Create visualization of ablation study results across seeds with color-coded configurations."""
     if not all_ablations or not all_ablations[0]:
         print("No ablation data available for visualization")
         return
 
     ablation_configs = list(all_ablations[0].keys())
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
+
+    color_map = {
+        'linguistic_only': '#3498db',      # Blue - linguistic features
+        'temporal_only': '#e74c3c',        # Red - temporal features
+        'psychological_only': '#f39c12',   # Orange - psychological features
+        'full_combined': '#2ecc71'         # Green - full model (best performance)
+    }
+
+    fallback_colors = ['#9b59b6', '#1abc9c', '#34495e', '#e67e22']
 
     ablation_agg = {}
     for config in ablation_configs:
@@ -229,6 +241,7 @@ def plot_ablation_study(all_ablations, output_dir="results"):
         configs = []
         means = []
         stds = []
+        colors = []
 
         for config in ablation_configs:
             if metric in ablation_agg[config]:
@@ -236,18 +249,24 @@ def plot_ablation_study(all_ablations, output_dir="results"):
                 means.append(ablation_agg[config][metric]['mean'])
                 stds.append(ablation_agg[config][metric]['std'])
 
-        x = np.arange(len(configs))
-        bars = ax.bar(x, means, yerr=stds, capsize=5, alpha=0.8, color='steelblue')
+                if config in color_map:
+                    colors.append(color_map[config])
+                else:
+                    fallback_idx = len(colors) % len(fallback_colors)
+                    colors.append(fallback_colors[fallback_idx])
 
-        ax.set_xlabel('Configuration')
-        ax.set_ylabel('Score')
-        ax.set_title(f'{metric.capitalize()}')
+        x = np.arange(len(configs))
+        bars = ax.bar(x, means, yerr=stds, capsize=5, alpha=0.85, color=colors, edgecolor='black', linewidth=0.5)
+
+        ax.set_xlabel('Configuration', fontsize=9)
+        ax.set_ylabel('Score', fontsize=9)
+        ax.set_title(f'{metric.capitalize()}', fontsize=11, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(configs, rotation=0, ha='center', fontsize=8)
         ax.set_ylim([0, 1.05])
-        ax.grid(axis='y', alpha=0.3)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
 
-    plt.suptitle('Ablation Study: Multi-Seed Results (Mean ± Std)', y=1.02, fontsize=14)
+    plt.suptitle('Ablation Study: Multi-Seed Results (Mean ± Std)', y=1.02, fontsize=14, fontweight='bold')
     plt.tight_layout()
     output_path = os.path.join(output_dir, 'aggregated_ablation_study.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -297,6 +316,125 @@ def plot_metrics_heatmap(aggregated_results, output_dir="results"):
     print(f"Metrics heatmap saved to: {output_path}")
 
 
+def plot_aggregated_confusion_matrices(all_results_with_cm, output_dir="results"):
+    """
+    Create aggregated confusion matrices for both models across all seeds.
+
+    Args:
+        all_results_with_cm: List of result dictionaries with confusion_matrix data
+        output_dir: Directory to save the plots
+    """
+    print("\nGenerating aggregated confusion matrices...")
+
+    models_cm = {}
+
+    for results in all_results_with_cm:
+        model_performance = results.get('model_performance', {})
+
+        for model_name, model_data in model_performance.items():
+            if 'confusion_matrix' in model_data:
+                if model_name not in models_cm:
+                    models_cm[model_name] = []
+                models_cm[model_name].append(np.array(model_data['confusion_matrix']))
+
+    if not models_cm:
+        print("No confusion matrix data found in results.")
+        return
+
+    mean_cms = {}
+    for model_name, cm_list in models_cm.items():
+        mean_cms[model_name] = np.mean(cm_list, axis=0).astype(int)
+
+    num_models = len(mean_cms)
+    fig, axes = plt.subplots(1, num_models, figsize=(6 * num_models, 5))
+
+    if num_models == 1:
+        axes = [axes]
+
+    class_names = ['Control', 'Depression']
+
+    for idx, (model_name, cm) in enumerate(mean_cms.items()):
+        ax = axes[idx]
+
+        display_name = model_name.replace('_', ' ').title()
+        if 'Roberta' in display_name:
+            display_name = 'RoBERTa Baseline'
+        elif 'Semantic' in display_name or 'Gnn' in display_name:
+            display_name = 'STEMS-GNN'
+
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                   xticklabels=class_names, yticklabels=class_names,
+                   ax=ax, cbar_kws={'label': 'Count'},
+                   annot_kws={'size': 14, 'weight': 'bold'})
+
+        ax.set_title(f'{display_name}\n(Averaged across all seeds)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('True Label', fontsize=11)
+        ax.set_xlabel('Predicted Label', fontsize=11)
+
+        total = cm.sum()
+        for i in range(2):
+            for j in range(2):
+                percentage = (cm[i, j] / total) * 100
+                ax.text(j + 0.5, i + 0.7, f'({percentage:.1f}%)',
+                       ha='center', va='center', fontsize=9, color='gray')
+
+        tn, fp, fn, tp = cm.ravel()
+        accuracy = (tp + tn) / total
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+        metrics_text = f'Acc: {accuracy:.3f} | Prec: {precision:.3f} | Rec: {recall:.3f} | F1: {f1:.3f}'
+        ax.text(0.5, -0.15, metrics_text, transform=ax.transAxes,
+               ha='center', fontsize=9, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+
+    plt.suptitle('Aggregated Confusion Matrices (Mean across all seeds)',
+                fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    output_path = os.path.join(output_dir, 'aggregated_confusion_matrices.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Aggregated confusion matrices saved to: {output_path}")
+
+    fig, axes = plt.subplots(1, num_models, figsize=(6 * num_models, 5))
+
+    if num_models == 1:
+        axes = [axes]
+
+    for idx, (model_name, cm) in enumerate(mean_cms.items()):
+        ax = axes[idx]
+
+        display_name = model_name.replace('_', ' ').title()
+        if 'Roberta' in display_name:
+            display_name = 'RoBERTa Baseline'
+        elif 'Semantic' in display_name or 'Gnn' in display_name:
+            display_name = 'STEMS-GNN'
+
+        cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+        sns.heatmap(cm_normalized, annot=True, fmt='.2%', cmap='RdYlGn',
+                   xticklabels=class_names, yticklabels=class_names,
+                   ax=ax, cbar_kws={'label': 'Percentage'},
+                   vmin=0, vmax=1, annot_kws={'size': 14, 'weight': 'bold'})
+
+        ax.set_title(f'{display_name} (Normalized)\n(Averaged across all seeds)',
+                    fontsize=12, fontweight='bold')
+        ax.set_ylabel('True Label', fontsize=11)
+        ax.set_xlabel('Predicted Label', fontsize=11)
+
+    plt.suptitle('Normalized Confusion Matrices (Row-wise percentages)',
+                fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    output_path = os.path.join(output_dir, 'aggregated_confusion_matrices_normalized.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Normalized confusion matrices saved to: {output_path}")
+
+
 def plot_error_comparison(aggregated_results, output_dir="results"):
     """Create visualization showing variation across seeds for each model."""
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
@@ -343,7 +481,7 @@ def main():
     print("="*80)
     print("Loading existing results from disk...\n")
 
-    all_results, all_ablations, seeds = load_seed_results()
+    all_results, all_ablations, seeds, all_full_data = load_seed_results()
 
     if not all_results:
         print("\n✗ No results found. Please run experiments first.")
@@ -367,6 +505,7 @@ def main():
     plot_metrics_heatmap(aggregated, output_dir=output_dir)
     plot_error_comparison(aggregated, output_dir=output_dir)
     plot_ablation_study(all_ablations, output_dir=output_dir)
+    plot_aggregated_confusion_matrices(all_full_data, output_dir=output_dir)
 
     print("\n" + "="*80)
     print("ALL VISUALIZATIONS COMPLETE")
@@ -378,6 +517,8 @@ def main():
     print("  - aggregated_metrics_heatmap.png")
     print("  - aggregated_error_distribution.png")
     print("  - aggregated_ablation_study.png")
+    print("  - aggregated_confusion_matrices.png")
+    print("  - aggregated_confusion_matrices_normalized.png")
     print()
 
 

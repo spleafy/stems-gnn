@@ -471,7 +471,6 @@ def run_multi_seed_evaluation(num_seeds=5):
     print("Evaluation Complete.")
     print(f"{'='*80}")
 
-    # Generate aggregated results and visualizations
     print(f"\n{'='*80}")
     print("GENERATING AGGREGATED RESULTS AND VISUALIZATIONS")
     print(f"{'='*80}\n")
@@ -484,26 +483,24 @@ def run_multi_seed_evaluation(num_seeds=5):
             plot_model_comparison,
             plot_ablation_study,
             plot_metrics_heatmap,
-            plot_error_comparison
+            plot_error_comparison,
+            plot_aggregated_confusion_matrices
         )
 
-        # Load results from disk
-        all_results_loaded, all_ablations, result_seeds = load_seed_results()
+        all_results_loaded, all_ablations, result_seeds, all_full_data = load_seed_results()
 
         if all_results_loaded:
-            # Aggregate metrics
             aggregated = aggregate_metrics(all_results_loaded)
 
-            # Save aggregated results
             output_dir = "results"
             save_aggregated_results(aggregated, result_seeds, output_dir=output_dir)
 
-            # Generate visualizations
             print(f"\nGenerating publication-quality visualizations...")
             plot_model_comparison(aggregated, output_dir=output_dir)
             plot_metrics_heatmap(aggregated, output_dir=output_dir)
             plot_error_comparison(aggregated, output_dir=output_dir)
             plot_ablation_study(all_ablations, output_dir=output_dir)
+            plot_aggregated_confusion_matrices(all_full_data, output_dir=output_dir)
 
             print(f"\n{'='*80}")
             print("AGGREGATED RESULTS COMPLETE")
