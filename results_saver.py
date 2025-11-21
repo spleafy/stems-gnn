@@ -58,16 +58,18 @@ class ResultsSaver:
         gnn_results: Dict[str, Any],
         ablation_results: Optional[Dict[str, Any]] = None,
         dataset_info: Optional[Dict[str, Any]] = None,
+        predictions: Optional[Dict[str, Tuple]] = None,
         filename: str = "comprehensive_results.json"
     ) -> None:
         """
-        Save comprehensive results to JSON file.
+        Save comprehensive results to JSON file including confusion matrices.
 
         Args:
             roberta_results: RoBERTa baseline results dictionary
             gnn_results: Semantic Ego-GNN results dictionary
             ablation_results: Optional ablation study results
             dataset_info: Optional dataset characteristics
+            predictions: Optional dictionary mapping model names to (y_true, y_pred) tuples
             filename: Output filename
         """
         print(f"\nSaving comprehensive results to {filename}...")
@@ -95,6 +97,16 @@ class ResultsSaver:
                 'auc': rb_metrics.get('auc', 0.0)
             }
 
+            if predictions and 'RoBERTa Baseline' in predictions:
+                from sklearn.metrics import confusion_matrix
+                y_true, y_pred_prob = predictions['RoBERTa Baseline']
+                y_pred = [1 if p > 0.5 else 0 for p in y_pred_prob]
+                cm = confusion_matrix(y_true, y_pred)
+                model_performance['roberta_baseline']['confusion_matrix'] = cm.tolist()
+                # Save prediction probabilities for ROC curve generation
+                model_performance['roberta_baseline']['y_true'] = [int(y) for y in y_true]
+                model_performance['roberta_baseline']['y_pred_prob'] = [float(p) for p in y_pred_prob]
+
         if gnn_results and 'correct_semantic_gnn' in gnn_results:
             gnn_metrics = gnn_results['correct_semantic_gnn']['metrics']
             model_performance['semantic_ego_gnn'] = {
@@ -104,6 +116,16 @@ class ResultsSaver:
                 'f1': gnn_metrics.get('f1', 0.0),
                 'auc': gnn_metrics.get('auc', 0.0)
             }
+
+            if predictions and 'Semantic Ego-GNN' in predictions:
+                from sklearn.metrics import confusion_matrix
+                y_true, y_pred_prob = predictions['Semantic Ego-GNN']
+                y_pred = [1 if p > 0.5 else 0 for p in y_pred_prob]
+                cm = confusion_matrix(y_true, y_pred)
+                model_performance['semantic_ego_gnn']['confusion_matrix'] = cm.tolist()
+                # Save prediction probabilities for ROC curve generation
+                model_performance['semantic_ego_gnn']['y_true'] = [int(y) for y in y_true]
+                model_performance['semantic_ego_gnn']['y_pred_prob'] = [float(p) for p in y_pred_prob]
 
         results['model_performance'] = model_performance
 
@@ -271,8 +293,17 @@ class ResultsSaver:
         x = np.arange(len(metrics_list))
         width = 0.35
 
-        bars1 = ax.bar(x - width/2, roberta_values, width, label='RoBERTa Baseline', alpha=0.8)
-        bars2 = ax.bar(x + width/2, gnn_values, width, label='Semantic Ego-GNN', alpha=0.8)
+        if roberta_values:
+            bars1 = ax.bar(x - width/2, roberta_values, width, label='RoBERTa Baseline', alpha=0.8)
+            for bar in bars1:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height, f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+
+        if gnn_values:
+            bars2 = ax.bar(x + width/2, gnn_values, width, label='Semantic Ego-GNN', alpha=0.8)
+            for bar in bars2:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height, f'{height:.3f}', ha='center', va='bottom', fontsize=9)
 
         ax.set_xlabel('Metrics', fontsize=12, fontweight='bold')
         ax.set_ylabel('Score', fontsize=12, fontweight='bold')
@@ -282,13 +313,6 @@ class ResultsSaver:
         ax.legend(fontsize=10)
         ax.grid(axis='y', alpha=0.3)
         ax.set_ylim([0, 1.0])
-
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2., height,
-                       f'{height:.3f}',
-                       ha='center', va='bottom', fontsize=9)
 
         plt.tight_layout()
         output_path = self.results_dir / filename
@@ -515,7 +539,7 @@ class ResultsSaver:
         print("="*60)
 
         self.save_comprehensive_results(
-            roberta_results, gnn_results, ablation_results, dataset_info
+            roberta_results, gnn_results, ablation_results, dataset_info, predictions
         )
 
         self.save_performance_comparison_csv(roberta_results, gnn_results)
