@@ -23,7 +23,7 @@ from results_saver import ResultsSaver
 from feature_extractor import UnifiedFeatureExtractor
 from statistical_significance import mcnemar_test, bootstrap_confidence_interval, plot_confusion_matrix, analyze_misclassifications
 from statistical_significance import mcnemar_test, bootstrap_confidence_interval, plot_confusion_matrix, analyze_misclassifications
-from sklearn.metrics import f1_score, accuracy_score
+from sklearn.metrics import f1_score, accuracy_score  
 from sklearn.model_selection import train_test_split
 
 
@@ -484,7 +484,8 @@ def run_multi_seed_evaluation(num_seeds=5):
             plot_ablation_study,
             plot_metrics_heatmap,
             plot_error_comparison,
-            plot_aggregated_confusion_matrices
+            plot_aggregated_confusion_matrices,
+            plot_aggregated_roc_curves
         )
 
         all_results_loaded, all_ablations, result_seeds, all_full_data = load_seed_results()
@@ -501,6 +502,7 @@ def run_multi_seed_evaluation(num_seeds=5):
             plot_error_comparison(aggregated, output_dir=output_dir)
             plot_ablation_study(all_ablations, output_dir=output_dir)
             plot_aggregated_confusion_matrices(all_full_data, output_dir=output_dir)
+            plot_aggregated_roc_curves(all_full_data, output_dir=output_dir)
 
             print(f"\n{'='*80}")
             print("AGGREGATED RESULTS COMPLETE")
@@ -512,6 +514,8 @@ def run_multi_seed_evaluation(num_seeds=5):
             print("  - aggregated_metrics_heatmap.png")
             print("  - aggregated_error_distribution.png")
             print("  - aggregated_ablation_study.png")
+            print("  - aggregated_confusion_matrices.png")
+            print("  - aggregated_roc_curves.png (if prediction probabilities available)")
             print("  - aggregated_summary.txt")
         else:
             print("No results found for aggregation.")

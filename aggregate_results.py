@@ -435,6 +435,147 @@ def plot_aggregated_confusion_matrices(all_results_with_cm, output_dir="results"
     print(f"Normalized confusion matrices saved to: {output_path}")
 
 
+def plot_aggregated_roc_curves(all_full_data, output_dir="results"):
+    """
+    Generate aggregated ROC curves from saved prediction probabilities.
+
+    Args:
+        all_full_data: List of full comprehensive results from each seed
+        output_dir: Directory to save output figure
+    """
+    from sklearn.metrics import roc_curve, auc
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Check if prediction probabilities are available
+    has_probs = False
+    for data in all_full_data:
+        perf = data.get('model_performance', {})
+        if 'roberta_baseline' in perf and 'y_pred_prob' in perf['roberta_baseline']:
+            has_probs = True
+            break
+
+    if not has_probs:
+        print("⚠ Skipping ROC curves: prediction probabilities not found in saved results")
+        print("  To generate ROC curves, re-run experiments (prediction probabilities are now saved)")
+        return None
+
+    print("Generating aggregated ROC curves...")
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+
+    # Define common FPR points for interpolation
+    mean_fpr = np.linspace(0, 1, 100)
+
+    # Collect ROC data for each seed
+    roberta_tprs = []
+    roberta_aucs = []
+    gnn_tprs = []
+    gnn_aucs = []
+
+    for data in all_full_data:
+        perf = data.get('model_performance', {})
+
+        # RoBERTa
+        if 'roberta_baseline' in perf and 'y_pred_prob' in perf['roberta_baseline']:
+            y_true = perf['roberta_baseline']['y_true']
+            y_prob = perf['roberta_baseline']['y_pred_prob']
+
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            roc_auc = auc(fpr, tpr)
+            roberta_aucs.append(roc_auc)
+
+            interp_tpr = np.interp(mean_fpr, fpr, tpr)
+            interp_tpr[0] = 0.0
+            roberta_tprs.append(interp_tpr)
+
+            # Plot individual seed curve
+            ax.plot(fpr, tpr, color='#1f77b4', alpha=0.15, linewidth=1)
+
+        # STEMS-GNN
+        if 'semantic_ego_gnn' in perf and 'y_pred_prob' in perf['semantic_ego_gnn']:
+            y_true = perf['semantic_ego_gnn']['y_true']
+            y_prob = perf['semantic_ego_gnn']['y_pred_prob']
+
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            roc_auc = auc(fpr, tpr)
+            gnn_aucs.append(roc_auc)
+
+            interp_tpr = np.interp(mean_fpr, fpr, tpr)
+            interp_tpr[0] = 0.0
+            gnn_tprs.append(interp_tpr)
+
+            # Plot individual seed curve
+            ax.plot(fpr, tpr, color='#ff7f0e', alpha=0.15, linewidth=1)
+
+    # Plot RoBERTa mean curve
+    if roberta_tprs:
+        roberta_mean_tpr = np.mean(roberta_tprs, axis=0)
+        roberta_mean_tpr[-1] = 1.0
+        roberta_std_tpr = np.std(roberta_tprs, axis=0)
+        roberta_mean_auc = np.mean(roberta_aucs)
+        roberta_std_auc = np.std(roberta_aucs)
+
+        ax.plot(
+            mean_fpr, roberta_mean_tpr,
+            color='#1f77b4',
+            label=f'RoBERTa (AUC = {roberta_mean_auc:.3f} ± {roberta_std_auc:.3f})',
+            linewidth=2.5
+        )
+
+        roberta_tpr_upper = np.minimum(roberta_mean_tpr + roberta_std_tpr, 1)
+        roberta_tpr_lower = np.maximum(roberta_mean_tpr - roberta_std_tpr, 0)
+        ax.fill_between(
+            mean_fpr, roberta_tpr_lower, roberta_tpr_upper,
+            color='#1f77b4', alpha=0.2, label='RoBERTa ± 1 std'
+        )
+
+    # Plot STEMS-GNN mean curve
+    if gnn_tprs:
+        gnn_mean_tpr = np.mean(gnn_tprs, axis=0)
+        gnn_mean_tpr[-1] = 1.0
+        gnn_std_tpr = np.std(gnn_tprs, axis=0)
+        gnn_mean_auc = np.mean(gnn_aucs)
+        gnn_std_auc = np.std(gnn_aucs)
+
+        ax.plot(
+            mean_fpr, gnn_mean_tpr,
+            color='#ff7f0e',
+            label=f'STEMS-GNN (AUC = {gnn_mean_auc:.3f} ± {gnn_std_auc:.3f})',
+            linewidth=2.5
+        )
+
+        gnn_tpr_upper = np.minimum(gnn_mean_tpr + gnn_std_tpr, 1)
+        gnn_tpr_lower = np.maximum(gnn_mean_tpr - gnn_std_tpr, 0)
+        ax.fill_between(
+            mean_fpr, gnn_tpr_lower, gnn_tpr_upper,
+            color='#ff7f0e', alpha=0.2, label='STEMS-GNN ± 1 std'
+        )
+
+    # Plot diagonal reference line
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=1.5, label='Random Classifier')
+
+    # Formatting
+    ax.set_xlabel('False Positive Rate', fontsize=13, fontweight='bold')
+    ax.set_ylabel('True Positive Rate', fontsize=13, fontweight='bold')
+    ax.set_title(
+        f'Aggregated ROC Curves (n={len(roberta_aucs)} seeds)\nDepression Detection Performance',
+        fontsize=14, fontweight='bold', pad=15
+    )
+    ax.legend(loc='lower right', fontsize=11, framealpha=0.95)
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.set_xlim([-0.02, 1.02])
+    ax.set_ylim([-0.02, 1.02])
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, 'aggregated_roc_curves.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"✓ Aggregated ROC curves saved: {output_path}")
+    return output_path
+
+
 def plot_error_comparison(aggregated_results, output_dir="results"):
     """Create visualization showing variation across seeds for each model."""
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']

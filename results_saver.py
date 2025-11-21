@@ -99,9 +99,13 @@ class ResultsSaver:
 
             if predictions and 'RoBERTa Baseline' in predictions:
                 from sklearn.metrics import confusion_matrix
-                y_true, y_pred = predictions['RoBERTa Baseline']
+                y_true, y_pred_prob = predictions['RoBERTa Baseline']
+                y_pred = [1 if p > 0.5 else 0 for p in y_pred_prob]
                 cm = confusion_matrix(y_true, y_pred)
                 model_performance['roberta_baseline']['confusion_matrix'] = cm.tolist()
+                # Save prediction probabilities for ROC curve generation
+                model_performance['roberta_baseline']['y_true'] = [int(y) for y in y_true]
+                model_performance['roberta_baseline']['y_pred_prob'] = [float(p) for p in y_pred_prob]
 
         if gnn_results and 'correct_semantic_gnn' in gnn_results:
             gnn_metrics = gnn_results['correct_semantic_gnn']['metrics']
@@ -113,11 +117,15 @@ class ResultsSaver:
                 'auc': gnn_metrics.get('auc', 0.0)
             }
 
-            if predictions and 'STEMS-GNN' in predictions:
+            if predictions and 'Semantic Ego-GNN' in predictions:
                 from sklearn.metrics import confusion_matrix
-                y_true, y_pred = predictions['STEMS-GNN']
+                y_true, y_pred_prob = predictions['Semantic Ego-GNN']
+                y_pred = [1 if p > 0.5 else 0 for p in y_pred_prob]
                 cm = confusion_matrix(y_true, y_pred)
                 model_performance['semantic_ego_gnn']['confusion_matrix'] = cm.tolist()
+                # Save prediction probabilities for ROC curve generation
+                model_performance['semantic_ego_gnn']['y_true'] = [int(y) for y in y_true]
+                model_performance['semantic_ego_gnn']['y_pred_prob'] = [float(p) for p in y_pred_prob]
 
         results['model_performance'] = model_performance
 
