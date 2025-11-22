@@ -293,6 +293,25 @@ class CorrectSemanticProcessor:
 
         return ego_networks
 
+from torch_geometric.utils import add_self_loops
+
+class TemporalGATConv(GATConv):
+    """
+    Extension of GATConv that applies a temporal multiplier to attention weights.
+    """
+    def forward(self, x, edge_index, edge_attr=None, temporal_multiplier=None, return_attention_weights=None):
+        self.temporal_multiplier = temporal_multiplier
+        out = super().forward(x, edge_index, edge_attr=edge_attr, return_attention_weights=return_attention_weights)
+        self.temporal_multiplier = None
+        return out
+
+    def message(self, x_j, alpha, index, ptr, size_i):
+        if self.temporal_multiplier is not None:
+            if self.temporal_multiplier.size(0) == alpha.size(0):
+                alpha = alpha * self.temporal_multiplier.view(-1, 1)
+            
+        return super().message(x_j, alpha)
+
 class CorrectSemanticGNN(nn.Module):
     """
     STEMS-GNN: Graph Attention Network with temporal attention mechanism.
@@ -315,9 +334,10 @@ class CorrectSemanticGNN(nn.Module):
 
         self.input_proj = nn.Linear(input_dim, hidden_dim)
 
-        self.gat1 = GATConv(hidden_dim, hidden_dim, heads=4, dropout=dropout, concat=False, edge_dim=1)
-        self.gat2 = GATConv(hidden_dim, hidden_dim, heads=4, dropout=dropout, concat=False, edge_dim=1)
-        self.gat3 = GATConv(hidden_dim, 64, heads=4, dropout=dropout, concat=False, edge_dim=1)
+        # Use TemporalGATConv with add_self_loops=False to handle temporal multiplier alignment manually
+        self.gat1 = TemporalGATConv(hidden_dim, hidden_dim, heads=4, dropout=dropout, concat=False, edge_dim=1, add_self_loops=False)
+        self.gat2 = TemporalGATConv(hidden_dim, hidden_dim, heads=4, dropout=dropout, concat=False, edge_dim=1, add_self_loops=False)
+        self.gat3 = TemporalGATConv(hidden_dim, 64, heads=4, dropout=dropout, concat=False, edge_dim=1, add_self_loops=False)
 
 
         if has_temporal:
@@ -361,6 +381,7 @@ class CorrectSemanticGNN(nn.Module):
 
         feature_indices = data.feature_indices
         temporal_indices = list(range(self.input_dim - self.temporal_dim, self.input_dim))
+        
         has_temporal_features = any(idx in feature_indices for idx in temporal_indices)
 
         if not has_temporal_features or data.x.shape[1] < self.temporal_dim:
@@ -370,17 +391,16 @@ class CorrectSemanticGNN(nn.Module):
         edge_index = data.edge_index
         temporal_sim = []
 
-        for i in range(edge_index.shape[1]):
-            src, dst = edge_index[0, i], edge_index[1, i]
-            t_i = temporal_features[src]
-            t_j = temporal_features[dst]
-
-            sim = F.cosine_similarity(t_i.unsqueeze(0), t_j.unsqueeze(0))
-            temporal_sim.append(sim)
-
-        temporal_sim = torch.stack(temporal_sim)
+        src_indices = edge_index[0]
+        dst_indices = edge_index[1]
+        
+        t_i = temporal_features[src_indices]
+        t_j = temporal_features[dst_indices]
+        
+        temporal_sim = F.cosine_similarity(t_i, t_j, dim=1)
+        
         temporal_multiplier = 1.0 + self.temporal_weight * temporal_sim
-
+        
         return temporal_multiplier
 
     def forward(self, data):
@@ -395,25 +415,36 @@ class CorrectSemanticGNN(nn.Module):
             return torch.zeros(1, 2)
 
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
+        
+        temporal_multiplier = self.compute_temporal_attention(data)
 
         x = self.input_proj(x)
         
         edge_attr_reshaped = edge_attr.view(-1, 1) if edge_attr is not None and edge_attr.ndim == 1 else edge_attr
 
+        if edge_index.size(1) > 0:
+            edge_index, edge_attr_reshaped = add_self_loops(
+                edge_index, edge_attr_reshaped, fill_value=1.0, num_nodes=x.size(0)
+            )
+            
+            if temporal_multiplier is not None:
+                self_loop_multiplier = 1.0 + self.temporal_weight * torch.ones(x.size(0), device=x.device)
+                temporal_multiplier = torch.cat([temporal_multiplier, self_loop_multiplier], dim=0)
+
         identity1 = x
-        x = self.gat1(x, edge_index, edge_attr=edge_attr_reshaped)
+        x = self.gat1(x, edge_index, edge_attr=edge_attr_reshaped, temporal_multiplier=temporal_multiplier)
         x = F.relu(x)
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.norm1(x + self.residual1(identity1))
 
         identity2 = x
-        x = self.gat2(x, edge_index, edge_attr=edge_attr_reshaped)
+        x = self.gat2(x, edge_index, edge_attr=edge_attr_reshaped, temporal_multiplier=temporal_multiplier)
         x = F.relu(x)
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.norm2(x + self.residual2(identity2))
 
         identity3 = x
-        x = self.gat3(x, edge_index, edge_attr=edge_attr_reshaped)
+        x = self.gat3(x, edge_index, edge_attr=edge_attr_reshaped, temporal_multiplier=temporal_multiplier)
         x = F.relu(x)
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.norm3(x + self.residual3(identity3))
